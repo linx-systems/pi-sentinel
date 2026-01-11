@@ -162,11 +162,29 @@ export class PiholeApiClient {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const isTimeout = error instanceof Error && error.name === 'AbortError';
 
+      // Check for SSL certificate errors
+      const isCertError = errorMessage.includes('SSL') ||
+                          errorMessage.includes('certificate') ||
+                          errorMessage.includes('CERT_') ||
+                          errorMessage.includes('SEC_ERROR') ||
+                          errorMessage.includes('NS_ERROR');
+
+      let key = 'network_error';
+      let message = errorMessage;
+
+      if (isTimeout) {
+        key = 'timeout';
+        message = 'Request timed out';
+      } else if (isCertError) {
+        key = 'cert_error';
+        message = 'SSL certificate error. Open your Pi-hole URL in Firefox and accept the certificate, then try again.';
+      }
+
       return {
         success: false,
         error: {
-          key: isTimeout ? 'timeout' : 'network_error',
-          message: isTimeout ? 'Request timed out' : errorMessage,
+          key,
+          message,
           status: 0,
         },
       };
@@ -252,7 +270,16 @@ export class PiholeApiClient {
 
     const query = queryParams.toString();
     const endpoint = query ? `${ENDPOINTS.QUERIES}?${query}` : ENDPOINTS.QUERIES;
-    return this.request('GET', endpoint);
+    const result = await this.request<{ queries: QueryEntry[] }>('GET', endpoint);
+
+    // Extract queries array from response
+    if (result.success && result.data) {
+      return {
+        success: true,
+        data: Array.isArray(result.data) ? result.data : (result.data.queries || []),
+      };
+    }
+    return result as ApiResult<QueryEntry[]>;
   }
 
   // ===== Domain Lists =====
@@ -271,7 +298,16 @@ export class PiholeApiClient {
     listType: DomainListType,
     matchType: DomainMatchType = 'exact'
   ): Promise<ApiResult<DomainEntry[]>> {
-    return this.request('GET', this.getDomainEndpoint(listType, matchType));
+    const result = await this.request<{ domains: DomainEntry[] }>('GET', this.getDomainEndpoint(listType, matchType));
+
+    // Extract domains array from response
+    if (result.success && result.data) {
+      return {
+        success: true,
+        data: Array.isArray(result.data) ? result.data : (result.data.domains || []),
+      };
+    }
+    return result as ApiResult<DomainEntry[]>;
   }
 
   /**
@@ -313,21 +349,65 @@ export class PiholeApiClient {
 
   /**
    * Test connection to Pi-hole (unauthenticated).
+   * Uses /api/auth with GET which returns session info or 401 - both indicate server is reachable.
    */
-  async testConnection(url?: string): Promise<ApiResult<{ version: string }>> {
-    const originalUrl = this.config.baseUrl;
-    if (url) {
-      this.config.baseUrl = url.replace(/\/+$/, '');
+  async testConnection(url?: string): Promise<ApiResult<void>> {
+    const testUrl = (url || this.config.baseUrl).replace(/\/+$/, '');
+
+    if (!testUrl) {
+      return {
+        success: false,
+        error: { key: 'not_configured', message: 'No URL provided', status: 0 },
+      };
     }
 
-    // Try to get docs endpoint which doesn't require auth
-    const result = await this.request<{ version: string }>('GET', '/api/docs', undefined, false);
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
-    if (url) {
-      this.config.baseUrl = originalUrl;
+      const response = await fetch(`${testUrl}/api/auth`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      // 401 means server is reachable but we need to authenticate - that's fine for a connection test
+      // 200 means we have a valid session
+      if (response.status === 401 || response.ok) {
+        return { success: true };
+      }
+
+      return {
+        success: false,
+        error: {
+          key: 'connection_failed',
+          message: `Server returned ${response.status}`,
+          status: response.status,
+        },
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const isTimeout = error instanceof Error && error.name === 'AbortError';
+      const isCertError = errorMessage.includes('SSL') ||
+                          errorMessage.includes('certificate') ||
+                          errorMessage.includes('CERT_') ||
+                          errorMessage.includes('SEC_ERROR') ||
+                          errorMessage.includes('NS_ERROR');
+
+      return {
+        success: false,
+        error: {
+          key: isTimeout ? 'timeout' : isCertError ? 'cert_error' : 'network_error',
+          message: isTimeout
+            ? 'Connection timed out'
+            : isCertError
+              ? 'SSL certificate error. Open your Pi-hole URL in Firefox and accept the certificate first.'
+              : errorMessage,
+          status: 0,
+        },
+      };
     }
-
-    return result;
   }
 }
 

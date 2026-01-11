@@ -1,10 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#3b82f6"/>
-      <stop offset="100%" style="stop-color:#1d4ed8"/>
+    <linearGradient id="shieldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3d4a5c"/>
+      <stop offset="50%" stop-color="#2a3441"/>
+      <stop offset="100%" stop-color="#1e2530"/>
     </linearGradient>
+    <radialGradient id="vortexGradient" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="40%" stop-color="#1a1a2e"/>
+      <stop offset="70%" stop-color="#16213e"/>
+      <stop offset="100%" stop-color="#1f4068"/>
+    </radialGradient>
   </defs>
-  <path d="M24 3L6 12v12c0 10.5 7.5 19.5 18 22.5 10.5-3 18-12 18-22.5V12L24 3z" fill="url(#grad)"/>
-  <path d="M19.5 24l4.5 4.5 9-9" stroke="white" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Shield shape -->
+  <path
+    d="M64 8 C64 8 108 18 108 18 C110 18.5 112 20.5 112 23 L112 58 C112 78 96 98 64 118 C32 98 16 78 16 58 L16 23 C16 20.5 18 18.5 20 18 C20 18 64 8 64 8 Z"
+    fill="url(#shieldGradient)"
+    stroke="#6b7a8a"
+    stroke-width="3"
+  />
+
+  <!-- Vortex container circle -->
+  <circle cx="64" cy="54" r="32" fill="url(#vortexGradient)"/>
+
+  <!-- Outer ring -->
+  <ellipse
+    cx="64" cy="54" rx="28" ry="10"
+    fill="none" stroke="#e53e3e" stroke-width="3.5"
+    transform="rotate(-15 64 54)"
+  />
+
+  <!-- Middle ring -->
+  <ellipse
+    cx="64" cy="54" rx="20" ry="7"
+    fill="none" stroke="#f56565" stroke-width="3"
+    transform="rotate(25 64 54)"
+  />
+
+  <!-- Inner ring -->
+  <ellipse
+    cx="64" cy="54" rx="12" ry="4.5"
+    fill="none" stroke="#fc8181" stroke-width="2.5"
+    transform="rotate(-40 64 54)"
+  />
+
+  <!-- Central void -->
+  <circle cx="64" cy="54" r="5" fill="#0a0a0a"/>
+  <circle cx="62" cy="52" r="1.5" fill="rgba(255,255,255,0.3)"/>
+
+  <!-- Accent dots -->
+  <circle cx="42" cy="42" r="2.5" fill="#fc8181" opacity="0.8"/>
+  <circle cx="88" cy="48" r="2" fill="#f56565" opacity="0.7"/>
+  <circle cx="50" cy="68" r="2.2" fill="#e53e3e" opacity="0.75"/>
+  <circle cx="82" cy="62" r="1.8" fill="#fc8181" opacity="0.65"/>
 </svg>

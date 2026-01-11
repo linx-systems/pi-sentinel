@@ -21,7 +21,13 @@ export function QueryLog() {
       })) as MessageResponse<QueryEntry[]>;
 
       if (response.success && response.data) {
-        setQueries(response.data);
+        // Ensure we have an array
+        const queryData = Array.isArray(response.data) ? response.data : [];
+        // Debug: log first query to see the actual format
+        if (queryData.length > 0) {
+          console.log('Query sample:', JSON.stringify(queryData[0], null, 2));
+        }
+        setQueries(queryData);
       }
     } catch (err) {
       console.error('Failed to load queries:', err);
@@ -31,9 +37,11 @@ export function QueryLog() {
   };
 
   const filteredQueries = queries.filter((q) => {
+    if (!q) return false;
     if (filter === 'all') return true;
-    if (filter === 'blocked') return isBlocked(q.status);
-    return !isBlocked(q.status);
+    const blocked = isBlocked(q.status);
+    if (filter === 'blocked') return blocked;
+    return !blocked;
   });
 
   if (isLoading) {
@@ -46,8 +54,8 @@ export function QueryLog() {
   }
 
   return (
-    <div>
-      <div style={{ padding: '8px', display: 'flex', gap: '8px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ padding: '8px', display: 'flex', gap: '8px', flexShrink: 0 }}>
         <FilterButton
           label="All"
           active={filter === 'all'}
@@ -83,10 +91,10 @@ export function QueryLog() {
           <p>No queries to display.</p>
         </div>
       ) : (
-        <div style={{ padding: '0 8px 8px' }}>
-          {filteredQueries.map((query) => (
-            <QueryItem key={query.id} query={query} />
-          ))}
+        <div style={{ padding: '0 8px 8px', overflow: 'auto', flex: 1 }}>
+          {filteredQueries.map((query, index) =>
+            query ? <QueryItem key={query.id || index} query={query} /> : null
+          )}
         </div>
       )}
     </div>
@@ -99,7 +107,22 @@ interface QueryItemProps {
 
 function QueryItem({ query }: QueryItemProps) {
   const blocked = isBlocked(query.status);
-  const time = new Date(query.timestamp * 1000).toLocaleTimeString();
+
+  // Handle timestamp - Pi-hole v6 uses 'time' as Unix timestamp (seconds with decimals)
+  const rawTime = (query as any).time || query.timestamp;
+  let timeStr = 'Unknown';
+  if (rawTime) {
+    const ts = rawTime * 1000; // Convert seconds to milliseconds
+    const date = new Date(ts);
+    if (!isNaN(date.getTime())) {
+      timeStr = date.toLocaleTimeString();
+    }
+  }
+
+  // Handle client - Pi-hole v6 returns {ip, name} object
+  const clientInfo = typeof query.client === 'object' && query.client
+    ? ((query.client as any).name || (query.client as any).ip || '?')
+    : (query.client || '?');
 
   return (
     <div class="query-item">
@@ -108,10 +131,10 @@ function QueryItem({ query }: QueryItemProps) {
       </span>
       <div class="details">
         <div class="domain" title={query.domain}>
-          {query.domain}
+          {query.domain || 'unknown'}
         </div>
         <div class="meta">
-          {query.type} • {query.client} • {time}
+          {query.type || '?'} • {clientInfo} • {timeStr}
         </div>
       </div>
     </div>
@@ -143,10 +166,30 @@ function FilterButton({ label, active, onClick }: FilterButtonProps) {
   );
 }
 
-function isBlocked(status: string): boolean {
-  // Pi-hole status codes for blocked queries
-  const blockedStatuses = ['1', '4', '5', '6', '7', '8', '9', '10', '11'];
-  return blockedStatuses.includes(status);
+function isBlocked(status: string | number | undefined | null): boolean {
+  if (status === undefined || status === null) return false;
+
+  if (typeof status === 'string') {
+    // Pi-hole v6 status strings
+    // Blocked: GRAVITY, BLACKLIST, REGEX, EXTERNAL_BLOCKED_*, DENYLIST, etc.
+    // Allowed: FORWARDED, CACHE, UPSTREAM_*, RETRIED, etc.
+    const blockedStatuses = [
+      'GRAVITY',
+      'BLACKLIST',
+      'DENYLIST',
+      'REGEX',
+      'EXTERNAL_BLOCKED_IP',
+      'EXTERNAL_BLOCKED_NULL',
+      'EXTERNAL_BLOCKED_NXRA',
+      'BLOCKED',
+      'SPECIAL_DOMAIN',
+      'DATABASE_BUSY'
+    ];
+    return blockedStatuses.includes(status.toUpperCase());
+  }
+
+  // Numeric status fallback: 2-11 are blocked
+  return status >= 2 && status <= 11;
 }
 
 function BlockedIcon() {

@@ -9,11 +9,11 @@ import type { ExtensionState } from '../../shared/types';
  * - Color indicating blocking status (green=enabled, red=disabled, gray=disconnected)
  */
 
-// Badge colors
+// Badge colors (brighter for better visibility)
 const COLORS = {
-  ENABLED: '#22c55e', // Green - blocking active
-  DISABLED: '#ef4444', // Red - blocking disabled
-  DISCONNECTED: '#6b7280', // Gray - not connected
+  ENABLED: '#10b981', // Bright green - blocking active
+  DISABLED: '#f43f5e', // Bright red - blocking disabled
+  DISCONNECTED: '#9ca3af', // Light gray - not connected
 } as const;
 
 class BadgeService {
