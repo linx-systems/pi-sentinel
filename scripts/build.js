@@ -16,13 +16,12 @@ if (existsSync(distDir)) {
 }
 mkdirSync(distDir, { recursive: true });
 
-// Common esbuild options
-const commonOptions = {
+// Base esbuild options
+const baseOptions = {
   bundle: true,
   minify: !isWatch,
   sourcemap: isWatch ? 'inline' : false,
   target: ['firefox115'],
-  format: 'esm',
   loader: {
     '.tsx': 'tsx',
     '.ts': 'ts',
@@ -36,22 +35,26 @@ const builds = [
   {
     entryPoints: [join(srcDir, 'background/index.ts')],
     outfile: join(distDir, 'background.js'),
-    ...commonOptions,
+    ...baseOptions,
+    format: 'iife', // Background scripts work with IIFE too
   },
   {
     entryPoints: [join(srcDir, 'popup/index.tsx')],
     outfile: join(distDir, 'popup/popup.js'),
-    ...commonOptions,
+    ...baseOptions,
+    format: 'iife',
   },
   {
     entryPoints: [join(srcDir, 'sidebar/index.tsx')],
     outfile: join(distDir, 'sidebar/sidebar.js'),
-    ...commonOptions,
+    ...baseOptions,
+    format: 'iife',
   },
   {
     entryPoints: [join(srcDir, 'options/index.tsx')],
     outfile: join(distDir, 'options/options.js'),
-    ...commonOptions,
+    ...baseOptions,
+    format: 'iife',
   },
 ];
 
