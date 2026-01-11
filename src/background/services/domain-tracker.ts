@@ -25,6 +25,12 @@ class DomainTrackerService {
       { urls: ['<all_urls>'] }
     );
 
+    // Listen for failed requests (blocked by Pi-hole, DNS errors, etc.)
+    browser.webRequest.onErrorOccurred.addListener(
+      (details) => this.handleRequest(details),
+      { urls: ['<all_urls>'] }
+    );
+
     // Listen for tab updates (navigation)
     browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       if (changeInfo.status === 'loading' && tab.url) {
@@ -76,10 +82,10 @@ class DomainTrackerService {
   }
 
   /**
-   * Handle a completed web request.
+   * Handle a web request (completed or failed).
    */
   private handleRequest(
-    details: browser.WebRequest.OnCompletedDetailsType
+    details: browser.WebRequest.OnCompletedDetailsType | browser.WebRequest.OnErrorOccurredDetailsType
   ): void {
     const { tabId, url, type } = details;
 
