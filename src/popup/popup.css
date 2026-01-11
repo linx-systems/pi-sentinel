@@ -147,22 +147,29 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 8px;
 }
 
 .blocking-header .label {
   font-size: 13px;
   color: #e0e0e0;
+  line-height: 24px;
 }
 
 .toggle {
   position: relative;
   width: 44px;
   height: 24px;
+  min-width: 44px;
+  flex-shrink: 0;
   background: #444;
+  border: none;
+  padding: 0;
   border-radius: 12px;
   cursor: pointer;
   transition: background 0.2s;
+  vertical-align: middle;
 }
 
 .toggle.active {
