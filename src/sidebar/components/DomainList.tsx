@@ -9,6 +9,12 @@ interface DomainListProps {
   onAddToList: (domain: string, listType: 'allow' | 'deny') => Promise<void>;
 }
 
+type SearchResult = {
+  gravity: boolean;
+  allowlist: boolean;
+  denylist: boolean;
+};
+
 export function DomainList({
   domains,
   thirdPartyDomains,
@@ -16,6 +22,46 @@ export function DomainList({
   onAddToList,
 }: DomainListProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Map<string, SearchResult>>(new Map());
+  const [isSearchingAll, setIsSearchingAll] = useState(false);
+
+  const setSearchResult = (domain: string, result: SearchResult | null) => {
+    setSearchResults(prev => {
+      const next = new Map(prev);
+      if (result) {
+        next.set(domain, result);
+      } else {
+        next.delete(domain);
+      }
+      return next;
+    });
+  };
+
+  const handleSearchAll = async () => {
+    const allDomains = [...new Set(domains)];
+    setIsSearchingAll(true);
+
+    for (const domain of allDomains) {
+      try {
+        const response = (await browser.runtime.sendMessage({
+          type: 'SEARCH_DOMAIN',
+          payload: { domain },
+        })) as MessageResponse<SearchResult>;
+
+        if (response.success && response.data) {
+          setSearchResult(domain, response.data);
+        }
+      } catch (err) {
+        console.error(`Search failed for ${domain}:`, err);
+      }
+    }
+
+    setIsSearchingAll(false);
+  };
+
+  const clearAllResults = () => {
+    setSearchResults(new Map());
+  };
 
   // Separate first-party and third-party domains
   const firstPartyDomains = domains.filter(
@@ -58,6 +104,23 @@ export function DomainList({
           value={searchQuery}
           onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
         />
+        <button
+          class="search-all-btn"
+          onClick={handleSearchAll}
+          disabled={isSearchingAll}
+          title="Search all domains in Pi-hole"
+        >
+          {isSearchingAll ? <SpinnerIcon /> : <SearchAllIcon />}
+        </button>
+        {searchResults.size > 0 && (
+          <button
+            class="clear-results-btn"
+            onClick={clearAllResults}
+            title="Clear all search results"
+          >
+            <ClearIcon />
+          </button>
+        )}
       </div>
 
       {filteredFirstParty.length > 0 && (
@@ -73,6 +136,8 @@ export function DomainList({
                 domain={domain}
                 isFirstParty
                 onAddToList={onAddToList}
+                searchResult={searchResults.get(domain) || null}
+                onSearchResult={(result) => setSearchResult(domain, result)}
               />
             ))}
           </ul>
@@ -92,6 +157,8 @@ export function DomainList({
                 domain={domain}
                 isFirstParty={false}
                 onAddToList={onAddToList}
+                searchResult={searchResults.get(domain) || null}
+                onSearchResult={(result) => setSearchResult(domain, result)}
               />
             ))}
           </ul>
@@ -111,24 +178,20 @@ interface DomainItemProps {
   domain: string;
   isFirstParty: boolean;
   onAddToList: (domain: string, listType: 'allow' | 'deny') => Promise<void>;
+  searchResult: SearchResult | null;
+  onSearchResult: (result: SearchResult | null) => void;
 }
 
-function DomainItem({ domain, isFirstParty, onAddToList }: DomainItemProps) {
-  const [searchResult, setSearchResult] = useState<{
-    gravity: boolean;
-    allowlist: boolean;
-    denylist: boolean;
-  } | null>(null);
-
+function DomainItem({ domain, isFirstParty, onAddToList, searchResult, onSearchResult }: DomainItemProps) {
   const handleSearch = async () => {
     try {
       const response = (await browser.runtime.sendMessage({
         type: 'SEARCH_DOMAIN',
         payload: { domain },
-      })) as MessageResponse<typeof searchResult>;
+      })) as MessageResponse<SearchResult>;
 
       if (response.success && response.data) {
-        setSearchResult(response.data);
+        onSearchResult(response.data);
       }
     } catch (err) {
       console.error('Search failed:', err);
@@ -172,7 +235,7 @@ function DomainItem({ domain, isFirstParty, onAddToList }: DomainItemProps) {
           </span>
           {searchResult.allowlist && <span class="status-allowlist">● Allowlisted</span>}
           {searchResult.denylist && <span class="status-denylist">● Denylisted</span>}
-          <button class="dismiss-btn" onClick={() => setSearchResult(null)} title="Dismiss">×</button>
+          <button class="dismiss-btn" onClick={() => onSearchResult(null)} title="Dismiss">×</button>
         </div>
       )}
     </li>
@@ -216,6 +279,35 @@ function SearchIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <circle cx="11" cy="11" r="8" />
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
+
+function SearchAllIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="10" cy="10" r="6" />
+      <line x1="21" y1="21" x2="14.5" y2="14.5" />
+      <line x1="10" y1="7" x2="10" y2="13" />
+      <line x1="7" y1="10" x2="13" y2="10" />
+    </svg>
+  );
+}
+
+function SpinnerIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spinner-icon">
+      <circle cx="12" cy="12" r="10" opacity="0.25" />
+      <path d="M12 2a10 10 0 0 1 10 10" />
+    </svg>
+  );
+}
+
+function ClearIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
     </svg>
   );
 }
