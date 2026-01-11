@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "PiSentinel",
+  "version": "1.0.0",
+  "description": "Pi-hole v6 companion - monitor and control DNS blocking",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "pisentinel@pihole.companion",
+      "strict_min_version": "115.0"
+    }
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.svg",
+      "32": "icons/icon-32.svg",
+      "48": "icons/icon-48.svg"
+    },
+    "default_title": "PiSentinel"
+  },
+  "sidebar_action": {
+    "default_panel": "sidebar/sidebar.html",
+    "default_icon": {
+      "16": "icons/icon-16.svg",
+      "32": "icons/icon-32.svg"
+    },
+    "default_title": "PiSentinel Domains"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "icons": {
+    "16": "icons/icon-16.svg",
+    "32": "icons/icon-32.svg",
+    "48": "icons/icon-48.svg",
+    "96": "icons/icon-96.svg",
+    "128": "icons/icon-128.svg"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

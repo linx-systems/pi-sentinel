@@ -1,0 +1,23 @@
+{
+  "name": "pisentinel",
+  "version": "1.0.0",
+  "description": "Firefox MV3 extension for Pi-hole v6 integration",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "dev": "node scripts/build.js --watch",
+    "lint": "eslint src --ext .ts,.tsx",
+    "package": "npm run build && cd dist && zip -r ../pisentinel.xpi ."
+  },
+  "devDependencies": {
+    "@types/webextension-polyfill": "^0.12.1",
+    "esbuild": "^0.24.2",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.2"
+  },
+  "dependencies": {
+    "preact": "^10.25.4",
+    "webextension-polyfill": "^0.12.0"
+  }
+}
