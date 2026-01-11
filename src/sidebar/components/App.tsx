@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import browser from 'webextension-polyfill';
 import { DomainList } from './DomainList';
 import { QueryLog } from './QueryLog';
@@ -21,9 +21,12 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [tabDomains, setTabDomains] = useState<TabDomains | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const initialLoadComplete = useRef(false);
 
   const loadState = useCallback(async () => {
-    setIsLoading(true);
+    if (!initialLoadComplete.current) {
+      setIsLoading(true);
+    }
     try {
       // Get connection state
       const stateResponse = (await browser.runtime.sendMessage({
@@ -50,6 +53,7 @@ export function App() {
       console.error('Failed to load state:', err);
     } finally {
       setIsLoading(false);
+      initialLoadComplete.current = true;
     }
   }, []);
 
@@ -121,7 +125,7 @@ export function App() {
   }
 
   return (
-    <div>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <header class="header">
         <h1>PiSentinel Domains</h1>
         {tabDomains && (
