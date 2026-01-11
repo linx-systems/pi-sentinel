@@ -137,32 +137,44 @@ function DomainItem({ domain, isFirstParty, onAddToList }: DomainItemProps) {
 
   return (
     <li class="domain-item">
-      <span class={`domain ${isFirstParty ? 'first-party' : 'third-party'}`}>
-        {domain}
-      </span>
-      <div class="domain-actions">
-        <button
-          class="action-btn allow"
-          onClick={() => onAddToList(domain, 'allow')}
-          title="Add to allowlist"
-        >
-          <AllowIcon />
-        </button>
-        <button
-          class="action-btn block"
-          onClick={() => onAddToList(domain, 'deny')}
-          title="Add to denylist"
-        >
-          <BlockIcon />
-        </button>
-        <button
-          class="action-btn search"
-          onClick={handleSearch}
-          title="Search in Pi-hole"
-        >
-          <SearchIcon />
-        </button>
+      <div class="domain-row">
+        <span class={`domain ${isFirstParty ? 'first-party' : 'third-party'}`}>
+          {domain}
+        </span>
+        <div class="domain-actions">
+          <button
+            class="action-btn allow"
+            onClick={() => onAddToList(domain, 'allow')}
+            title="Add to allowlist"
+          >
+            <AllowIcon />
+          </button>
+          <button
+            class="action-btn block"
+            onClick={() => onAddToList(domain, 'deny')}
+            title="Add to denylist"
+          >
+            <BlockIcon />
+          </button>
+          <button
+            class="action-btn search"
+            onClick={handleSearch}
+            title="Search in Pi-hole"
+          >
+            <SearchIcon />
+          </button>
+        </div>
       </div>
+      {searchResult && (
+        <div class="search-result">
+          <span class={searchResult.gravity ? 'status-blocked' : 'status-allowed'}>
+            {searchResult.gravity ? '● Blocked (gravity)' : '○ Not in blocklist'}
+          </span>
+          {searchResult.allowlist && <span class="status-allowlist">● Allowlisted</span>}
+          {searchResult.denylist && <span class="status-denylist">● Denylisted</span>}
+          <button class="dismiss-btn" onClick={() => setSearchResult(null)} title="Dismiss">×</button>
+        </div>
+      )}
     </li>
   );
 }

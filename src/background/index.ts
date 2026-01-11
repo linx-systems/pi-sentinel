@@ -247,12 +247,28 @@ async function handleSearchDomain(
   const result = await apiClient.searchDomain(domain);
 
   if (result.success && result.data) {
+    const data = result.data as Record<string, unknown>;
+    console.log('Search API response:', JSON.stringify(data, null, 2));
+
+    // Handle Pi-hole v6 API response structure
+    // API returns: { search: { domains: [...], gravity: [...] } }
+    const searchData = (data.search as Record<string, unknown>) || data;
+    const gravity = searchData.gravity;
+    const domains = searchData.domains as unknown[];
+
+    // gravity is an array of matching blocklist entries
+    const gravityCount = Array.isArray(gravity) ? gravity.length : 0;
+
+    // domains is an array - check for allow/deny entries
+    const allowlist = Array.isArray(domains) ? domains.filter((d: any) => d.type === 'allow') : [];
+    const denylist = Array.isArray(domains) ? domains.filter((d: any) => d.type === 'deny') : [];
+
     return {
       success: true,
       data: {
-        gravity: result.data.gravity.count > 0,
-        allowlist: result.data.domains.allow.length > 0,
-        denylist: result.data.domains.deny.length > 0,
+        gravity: gravityCount > 0,
+        allowlist: allowlist.length > 0,
+        denylist: denylist.length > 0,
       },
     };
   }

@@ -107,7 +107,7 @@ body {
 
 .domain-item {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   padding: 8px;
   border-radius: 6px;
   transition: background 0.2s;
@@ -115,6 +115,12 @@ body {
 
 .domain-item:hover {
   background: #2d2d44;
+}
+
+.domain-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
 
 .domain-item .domain {
@@ -169,6 +175,49 @@ body {
 
 .action-btn.search:hover {
   color: #3b82f6;
+}
+
+/* Search Result */
+.search-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 0 0;
+  margin-top: 6px;
+  border-top: 1px solid #3d3d54;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.search-result .status-blocked {
+  color: #ef4444;
+}
+
+.search-result .status-allowed {
+  color: #22c55e;
+}
+
+.search-result .status-allowlist {
+  color: #3b82f6;
+}
+
+.search-result .status-denylist {
+  color: #f59e0b;
+}
+
+.search-result .dismiss-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.search-result .dismiss-btn:hover {
+  color: #888;
 }
 
 /* Query Log */
