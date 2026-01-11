@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useState, useEffect } from 'preact/hooks';
 import browser from 'webextension-polyfill';
 import { DISABLE_TIMERS } from '../../shared/constants';
 
@@ -10,6 +10,29 @@ interface BlockingToggleProps {
 export function BlockingToggle({ enabled, timer }: BlockingToggleProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [showTimers, setShowTimers] = useState(false);
+  const [remainingTime, setRemainingTime] = useState<number | null>(timer);
+
+  // Update remaining time when timer prop changes
+  useEffect(() => {
+    setRemainingTime(timer);
+  }, [timer]);
+
+  // Countdown timer
+  useEffect(() => {
+    if (!remainingTime || remainingTime <= 0 || enabled) return;
+
+    const interval = setInterval(() => {
+      setRemainingTime(prev => {
+        if (!prev || prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [remainingTime, enabled]);
 
   const handleToggle = async () => {
     if (enabled) {
@@ -62,8 +85,8 @@ export function BlockingToggle({ enabled, timer }: BlockingToggleProps) {
         />
       </div>
 
-      {!enabled && timer && timer > 0 && (
-        <div class="timer-info">{formatTimer(timer)}</div>
+      {!enabled && remainingTime && remainingTime > 0 && (
+        <div class="timer-info">{formatTimer(remainingTime)}</div>
       )}
 
       {showTimers && (
