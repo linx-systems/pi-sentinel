@@ -88,6 +88,9 @@ export interface PersistedConfig {
   encryptedPassword: EncryptedData | null;
   refreshInterval: number;
   notificationsEnabled: boolean;
+  rememberPassword: boolean;
+  /** Encrypted master key for persistent re-authentication (only when rememberPassword is true) */
+  encryptedMasterKey: EncryptedData | null;
 }
 
 export interface EncryptedData {

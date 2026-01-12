@@ -3,13 +3,14 @@ import browser from 'webextension-polyfill';
 import type { MessageResponse } from '../../shared/messaging';
 
 interface ServerConfigProps {
-  onSave: (url: string, password: string) => Promise<void>;
+  onSave: (url: string, password: string, rememberPassword: boolean) => Promise<void>;
   isLoading: boolean;
 }
 
 export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
   const [url, setUrl] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberPassword, setRememberPassword] = useState(false);
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testError, setTestError] = useState('');
 
@@ -54,7 +55,7 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
       saveUrl = `http://${saveUrl}`;
     }
 
-    await onSave(saveUrl, password);
+    await onSave(saveUrl, password, rememberPassword);
   };
 
   return (
@@ -118,6 +119,22 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
           />
           <p class="hint">
             The password you use to log into Pi-hole's web interface
+          </p>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              id="rememberPassword"
+              checked={rememberPassword}
+              onChange={(e) => setRememberPassword((e.target as HTMLInputElement).checked)}
+              disabled={isLoading}
+            />
+            <span class="checkbox-text">Remember Password</span>
+          </label>
+          <p class="hint">
+            Stay logged in across browser restarts. Your password is securely encrypted.
           </p>
         </div>
 

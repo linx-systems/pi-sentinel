@@ -127,6 +127,28 @@ body {
   cursor: pointer;
 }
 
+/* Checkbox Label (inline) */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  color: #e0e0e0;
+  margin-bottom: 0;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+
+.checkbox-label .checkbox-text {
+  font-size: 14px;
+  color: #e0e0e0;
+}
+
 /* TOTP Section */
 .totp-section {
   background: #252538;

@@ -36,7 +36,7 @@ export function App() {
     }
   };
 
-  const handleSaveAndConnect = async (url: string, password: string) => {
+  const handleSaveAndConnect = async (url: string, password: string, rememberPassword: boolean) => {
     setIsLoading(true);
     setMessage(null);
     setSavedUrl(url);
@@ -45,7 +45,7 @@ export function App() {
       // Save config
       const saveResponse = (await browser.runtime.sendMessage({
         type: 'SAVE_CONFIG',
-        payload: { piholeUrl: url, password },
+        payload: { piholeUrl: url, password, rememberPassword },
       })) as MessageResponse<void>;
 
       if (!saveResponse.success) {

@@ -28,11 +28,16 @@ export const ALARMS = {
 export const DEFAULTS = {
   REFRESH_INTERVAL: 30, // seconds
   SESSION_KEEPALIVE_INTERVAL: 4, // minutes (Pi-hole default session is 300s = 5min)
+  SESSION_RENEWAL_THRESHOLD: 60, // seconds before expiry to trigger renewal
   API_TIMEOUT: 10000, // ms
   PBKDF2_ITERATIONS: 100000,
   SALT_LENGTH: 16,
   IV_LENGTH: 12,
 } as const;
+
+// Extension-specific entropy for encrypting the master key when "Remember Password" is enabled
+// This provides a layer of obfuscation for the stored master key
+export const EXTENSION_ENTROPY = 'PiSentinel-v1-MasterKey-Encryption' as const;
 
 // Disable Timer Options (in seconds)
 export const DISABLE_TIMERS = [
