@@ -23,11 +23,13 @@ Before installing, ensure you have:
 
 - **Node.js** 18.x or later (LTS recommended)
 - **npm** 9.x or later (comes with Node.js)
+- **Bun** 0.7.x or later (optional, for faster build times)
 
 Verify your installation:
 ```bash
 node --version  # Should output v18.x.x or higher
 npm --version   # Should output 9.x.x or higher
+bun --version   # Should output 0.7.x or higher (if installed)
 ```
 
 ## Installation
@@ -43,11 +45,15 @@ npm --version   # Should output 9.x.x or higher
 2. **Install dependencies**
    ```bash
    npm install
+   # or
+   bun install
    ```
 
 3. **Build the extension**
    ```bash
    npm run build
+   # or
+   bun run build
    ```
 
 4. **Load in Firefox**

@@ -3,3 +3,6 @@ dist/
 *.xpi
 .DS_Store
 .idea
+.claude/
+.tldr
+.tldrignore
