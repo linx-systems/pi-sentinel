@@ -24,9 +24,9 @@ export function App() {
       // Get connection state
       const stateResponse = (await browser.runtime.sendMessage({
         type: 'GET_STATE',
-      })) as MessageResponse<ExtensionState>;
+      })) as MessageResponse<ExtensionState> | undefined;
 
-      if (stateResponse.success && stateResponse.data) {
+      if (stateResponse?.success && stateResponse.data) {
         setIsConnected(stateResponse.data.isConnected);
       }
 
@@ -36,9 +36,9 @@ export function App() {
         const domainsResponse = (await browser.runtime.sendMessage({
           type: 'GET_TAB_DOMAINS',
           payload: { tabId: currentTab.id },
-        })) as MessageResponse<TabDomains>;
+        })) as MessageResponse<TabDomains> | undefined;
 
-        if (domainsResponse.success && domainsResponse.data) {
+        if (domainsResponse?.success && domainsResponse.data) {
           setTabDomains(domainsResponse.data);
         }
       }
@@ -88,12 +88,12 @@ export function App() {
       const response = (await browser.runtime.sendMessage({
         type: listType === 'allow' ? 'ADD_TO_ALLOWLIST' : 'ADD_TO_DENYLIST',
         payload: { domain },
-      })) as MessageResponse<void>;
+      })) as MessageResponse<void> | undefined;
 
-      if (response.success) {
+      if (response?.success) {
         showToast('success', `Added ${domain} to ${listType}list`);
       } else {
-        showToast('error', response.error || 'Failed to add domain');
+        showToast('error', response?.error || 'Failed to add domain');
       }
     } catch (err) {
       showToast('error', 'Failed to add domain');

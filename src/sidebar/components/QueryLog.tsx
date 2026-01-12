@@ -20,9 +20,9 @@ export function QueryLog() {
       const response = (await browser.runtime.sendMessage({
         type: 'GET_QUERIES',
         payload: { length: 100 },
-      })) as MessageResponse<QueryEntry[]>;
+      })) as MessageResponse<QueryEntry[]> | undefined;
 
-      if (response.success && response.data) {
+      if (response?.success && response.data) {
         // Ensure we have an array
         const queryData = Array.isArray(response.data) ? response.data : [];
         setQueries(queryData);

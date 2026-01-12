@@ -389,8 +389,9 @@ async function handleAlarm(alarm: browser.Alarms.Alarm): Promise<void> {
 // ===== Event Listeners =====
 
 // Register message listener at top level (required for event pages)
+// Must return a Promise for async responses to work correctly
 browser.runtime.onMessage.addListener(
-  (message: unknown, sender: browser.Runtime.MessageSender) => {
+  (message: unknown, sender: browser.Runtime.MessageSender): Promise<MessageResponse<unknown>> => {
     return handleMessage(message as Message, sender);
   }
 );

@@ -26,9 +26,9 @@ export function App() {
 
       const response = (await browser.runtime.sendMessage({
         type: 'GET_STATE',
-      })) as MessageResponse<ExtensionState>;
+      })) as MessageResponse<ExtensionState> | undefined;
 
-      if (response.success && response.data) {
+      if (response?.success && response.data) {
         setState(response.data);
 
         if (response.data.isConnected) {

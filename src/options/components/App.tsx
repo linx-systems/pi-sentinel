@@ -23,9 +23,9 @@ export function App() {
     try {
       const response = (await browser.runtime.sendMessage({
         type: 'GET_STATE',
-      })) as MessageResponse<ExtensionState>;
+      })) as MessageResponse<ExtensionState> | undefined;
 
-      if (response.success && response.data) {
+      if (response?.success && response.data) {
         if (response.data.isConnected) {
           setConnectionState('connected');
         } else if (response.data.totpRequired) {
@@ -47,7 +47,11 @@ export function App() {
       const saveResponse = (await browser.runtime.sendMessage({
         type: 'SAVE_CONFIG',
         payload: { piholeUrl: url, password, rememberPassword },
-      })) as MessageResponse<void>;
+      })) as MessageResponse<void> | undefined;
+
+      if (!saveResponse) {
+        throw new Error('Background script not ready. Please try again.');
+      }
 
       if (!saveResponse.success) {
         throw new Error(saveResponse.error || 'Failed to save configuration');
@@ -57,7 +61,11 @@ export function App() {
       const authResponse = (await browser.runtime.sendMessage({
         type: 'AUTHENTICATE',
         payload: { password },
-      })) as MessageResponse<{ totpRequired?: boolean }>;
+      })) as MessageResponse<{ totpRequired?: boolean }> | undefined;
+
+      if (!authResponse) {
+        throw new Error('Background script not ready. Please try again.');
+      }
 
       if (authResponse.success) {
         setConnectionState('connected');
@@ -88,7 +96,11 @@ export function App() {
       const response = (await browser.runtime.sendMessage({
         type: 'AUTHENTICATE',
         payload: { password, totp },
-      })) as MessageResponse<void>;
+      })) as MessageResponse<void> | undefined;
+
+      if (!response) {
+        throw new Error('Background script not ready. Please try again.');
+      }
 
       if (response.success) {
         setConnectionState('connected');

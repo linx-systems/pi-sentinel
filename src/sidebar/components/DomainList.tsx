@@ -56,9 +56,9 @@ export function DomainList({
         const response = (await browser.runtime.sendMessage({
           type: 'SEARCH_DOMAIN',
           payload: { domain },
-        })) as MessageResponse<SearchResult>;
+        })) as MessageResponse<SearchResult> | undefined;
 
-        if (response.success && response.data) {
+        if (response?.success && response.data) {
           setSearchResult(domain, response.data);
         }
       } catch (err) {
@@ -198,9 +198,9 @@ function DomainItem({ domain, isFirstParty, onAddToList, searchResult, onSearchR
       const response = (await browser.runtime.sendMessage({
         type: 'SEARCH_DOMAIN',
         payload: { domain },
-      })) as MessageResponse<SearchResult>;
+      })) as MessageResponse<SearchResult> | undefined;
 
-      if (response.success && response.data) {
+      if (response?.success && response.data) {
         onSearchResult(response.data);
       }
     } catch (err) {
