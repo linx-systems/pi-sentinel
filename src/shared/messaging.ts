@@ -23,7 +23,8 @@ export type MessageType =
   | 'GET_QUERIES'
   | 'SAVE_CONFIG'
   | 'TEST_CONNECTION'
-  | 'STATE_UPDATED';
+  | 'STATE_UPDATED'
+  | 'TAB_DOMAINS_UPDATED';
 
 // Message Payloads
 export interface AuthenticatePayload {
@@ -82,7 +83,17 @@ export type Message =
   | { type: 'GET_QUERIES'; payload?: GetQueriesPayload }
   | { type: 'SAVE_CONFIG'; payload: SaveConfigPayload }
   | { type: 'TEST_CONNECTION'; payload: TestConnectionPayload }
-  | { type: 'STATE_UPDATED'; payload: Partial<ExtensionState> };
+  | { type: 'STATE_UPDATED'; payload: Partial<ExtensionState> }
+  | { type: 'TAB_DOMAINS_UPDATED'; payload: SerializableTabDomains };
+
+// Serializable version of TabDomainData for messaging
+export interface SerializableTabDomains {
+  tabId: number;
+  pageUrl: string;
+  firstPartyDomain: string;
+  domains: string[];
+  thirdPartyDomains: string[];
+}
 
 // Type-safe message sender
 export async function sendMessage<T>(message: Message): Promise<MessageResponse<T>> {

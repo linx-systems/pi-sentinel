@@ -94,6 +94,23 @@ class StateStore {
     }
   }
 
+  /**
+   * Broadcast tab domains update to sidebar.
+   */
+  private async broadcastTabDomainsUpdate(tabId: number): Promise<void> {
+    try {
+      const data = this.getSerializableTabDomains(tabId);
+      if (data) {
+        await browser.runtime.sendMessage({
+          type: 'TAB_DOMAINS_UPDATED',
+          payload: data,
+        });
+      }
+    } catch {
+      // No listeners, ignore
+    }
+  }
+
   // ===== Tab Domain Tracking =====
 
   /**
@@ -131,11 +148,18 @@ class StateStore {
     const data = this.tabDomains.get(tabId);
     if (!data) return;
 
+    // Check if domain is already tracked
+    const wasNew = !data.domains.has(domain);
     data.domains.add(domain);
 
     // Check if third-party
     if (domain !== data.firstPartyDomain && !isSameSite(domain, data.firstPartyDomain)) {
       data.thirdPartyDomains.add(domain);
+    }
+
+    // Broadcast update if this was a new domain
+    if (wasNew) {
+      this.broadcastTabDomainsUpdate(tabId);
     }
   }
 

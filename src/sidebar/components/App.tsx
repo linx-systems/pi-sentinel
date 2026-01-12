@@ -3,17 +3,10 @@ import browser from 'webextension-polyfill';
 import { DomainList } from './DomainList';
 import { QueryLog } from './QueryLog';
 import type { ExtensionState } from '../../shared/types';
-import type { MessageResponse } from '../../shared/messaging';
+import type { MessageResponse, SerializableTabDomains } from '../../shared/messaging';
 
 type Tab = 'domains' | 'queries';
-
-interface TabDomains {
-  tabId: number;
-  pageUrl: string;
-  firstPartyDomain: string;
-  domains: string[];
-  thirdPartyDomains: string[];
-}
+type TabDomains = SerializableTabDomains;
 
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('domains');
@@ -64,11 +57,17 @@ export function App() {
     const handleTabActivated = () => loadState();
     browser.tabs.onActivated.addListener(handleTabActivated);
 
-    // Listen for state updates
-    const handleMessage = (message: unknown) => {
-      const msg = message as { type: string };
+    // Listen for state and domain updates
+    const handleMessage = async (message: unknown) => {
+      const msg = message as { type: string; payload?: TabDomains };
       if (msg.type === 'STATE_UPDATED') {
         loadState();
+      } else if (msg.type === 'TAB_DOMAINS_UPDATED' && msg.payload) {
+        // Real-time domain update - check if it's for the current tab
+        const [currentTab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (currentTab?.id === msg.payload.tabId) {
+          setTabDomains(msg.payload);
+        }
       }
     };
     browser.runtime.onMessage.addListener(handleMessage);
