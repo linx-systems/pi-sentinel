@@ -1,4 +1,5 @@
 import browser from 'webextension-polyfill';
+import { isSameSite } from '../../shared/utils';
 import type { ExtensionState, TabDomainData } from '../../shared/types';
 
 /**
@@ -133,7 +134,7 @@ class StateStore {
     data.domains.add(domain);
 
     // Check if third-party
-    if (domain !== data.firstPartyDomain && !this.isSameSite(domain, data.firstPartyDomain)) {
+    if (domain !== data.firstPartyDomain && !isSameSite(domain, data.firstPartyDomain)) {
       data.thirdPartyDomains.add(domain);
     }
   }
@@ -150,16 +151,6 @@ class StateStore {
    */
   getAllTrackedTabs(): number[] {
     return Array.from(this.tabDomains.keys());
-  }
-
-  /**
-   * Check if two domains belong to the same site.
-   * Simple implementation - could be enhanced with public suffix list.
-   */
-  private isSameSite(domain1: string, domain2: string): boolean {
-    // Extract registrable domain (simple approach)
-    const getParts = (d: string) => d.split('.').slice(-2).join('.');
-    return getParts(domain1) === getParts(domain2);
   }
 
   // ===== Serialization for Popup/Sidebar =====

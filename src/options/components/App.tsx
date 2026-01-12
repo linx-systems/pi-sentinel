@@ -2,6 +2,7 @@ import { useState, useEffect } from 'preact/hooks';
 import browser from 'webextension-polyfill';
 import { ServerConfig } from './ServerConfig';
 import { TotpInput } from './TotpInput';
+import { CheckIcon, ErrorIcon, InfoIcon } from '../../shared/icons';
 import type { ExtensionState } from '../../shared/types';
 import type { MessageResponse } from '../../shared/messaging';
 
@@ -167,33 +168,5 @@ export function App() {
         </p>
       </footer>
     </div>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
-function ErrorIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="15" y1="9" x2="9" y2="15" />
-      <line x1="9" y1="9" x2="15" y2="15" />
-    </svg>
-  );
-}
-
-function InfoIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="12" y1="16" x2="12" y2="12" />
-      <line x1="12" y1="8" x2="12.01" y2="8" />
-    </svg>
   );
 }

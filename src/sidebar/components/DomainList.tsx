@@ -1,5 +1,15 @@
 import { useState } from 'preact/hooks';
 import browser from 'webextension-polyfill';
+import {
+  GlobeIcon,
+  CheckIcon,
+  BlockIcon,
+  SearchIcon,
+  SearchAllIcon,
+  SpinnerIcon,
+  ClearIcon,
+} from '../../shared/icons';
+import { isSameSite } from '../../shared/utils';
 import type { MessageResponse } from '../../shared/messaging';
 
 interface DomainListProps {
@@ -210,7 +220,7 @@ function DomainItem({ domain, isFirstParty, onAddToList, searchResult, onSearchR
             onClick={() => onAddToList(domain, 'allow')}
             title="Add to allowlist"
           >
-            <AllowIcon />
+            <CheckIcon size={14} />
           </button>
           <button
             class="action-btn block"
@@ -239,75 +249,5 @@ function DomainItem({ domain, isFirstParty, onAddToList, searchResult, onSearchR
         </div>
       )}
     </li>
-  );
-}
-
-function isSameSite(domain1: string, domain2: string): boolean {
-  const getParts = (d: string) => d.split('.').slice(-2).join('.');
-  return getParts(domain1) === getParts(domain2);
-}
-
-function GlobeIcon() {
-  return (
-    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="2" y1="12" x2="22" y2="12" />
-      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-    </svg>
-  );
-}
-
-function AllowIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
-function BlockIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-    </svg>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="11" cy="11" r="8" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  );
-}
-
-function SearchAllIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="10" cy="10" r="6" />
-      <line x1="21" y1="21" x2="14.5" y2="14.5" />
-      <line x1="10" y1="7" x2="10" y2="13" />
-      <line x1="7" y1="10" x2="13" y2="10" />
-    </svg>
-  );
-}
-
-function SpinnerIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spinner-icon">
-      <circle cx="12" cy="12" r="10" opacity="0.25" />
-      <path d="M12 2a10 10 0 0 1 10 10" />
-    </svg>
-  );
-}
-
-function ClearIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
   );
 }
