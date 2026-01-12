@@ -289,11 +289,13 @@ async function handleSaveConfig(payload: {
   password: string;
   notificationsEnabled?: boolean;
   refreshInterval?: number;
+  rememberPassword?: boolean;
 }): Promise<MessageResponse<void>> {
   try {
     await authManager.saveConfig(payload.piholeUrl, payload.password, {
       notificationsEnabled: payload.notificationsEnabled,
       refreshInterval: payload.refreshInterval,
+      rememberPassword: payload.rememberPassword,
     });
 
     notificationService.setEnabled(payload.notificationsEnabled ?? true);
@@ -350,8 +352,27 @@ async function stopStatsPolling(): Promise<void> {
 async function handleAlarm(alarm: browser.Alarms.Alarm): Promise<void> {
   switch (alarm.name) {
     case ALARMS.SESSION_KEEPALIVE:
+      // First, try proactive renewal if session is about to expire
+      const renewalSuccess = await authManager.renewSessionBeforeExpiry();
+      if (renewalSuccess) {
+        // Session renewed or still valid
+        break;
+      }
+
+      // Fall back to regular keepalive
       const sessionValid = await authManager.handleKeepalive();
       if (!sessionValid) {
+        // Session expired and couldn't be renewed
+        // Try auto-reauthentication if Remember Password is enabled
+        const password = await authManager.getDecryptedPassword();
+        if (password) {
+          const result = await authManager.authenticate(password);
+          if (result.success) {
+            store.setState({ isConnected: true });
+            break;
+          }
+        }
+
         store.setState({ isConnected: false });
         await notificationService.showConnectionError('Session expired');
       }

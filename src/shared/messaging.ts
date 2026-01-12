@@ -51,6 +51,7 @@ export interface SaveConfigPayload {
   password: string;
   notificationsEnabled?: boolean;
   refreshInterval?: number;
+  rememberPassword?: boolean;
 }
 
 export interface TestConnectionPayload {

@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill';
 import { apiClient } from './client';
 import { encryption } from '../crypto/encryption';
-import { STORAGE_KEYS, ALARMS, DEFAULTS } from '../../shared/constants';
+import { STORAGE_KEYS, ALARMS, DEFAULTS, EXTENSION_ENTROPY } from '../../shared/constants';
 import type { PersistedConfig, SessionData, EncryptedData } from '../../shared/types';
 
 /**
@@ -18,9 +18,16 @@ export class AuthManager {
 
   /**
    * Initialize the auth manager.
-   * Attempts to restore session from storage.
+   * Attempts to restore session from storage, and auto-reauthenticate if "Remember Password" is enabled.
    */
   async initialize(): Promise<boolean> {
+    const config = await this.getConfig();
+
+    // Set base URL if configured
+    if (config?.piholeUrl) {
+      apiClient.setBaseUrl(config.piholeUrl);
+    }
+
     // Try to restore existing session
     const session = await this.getSessionFromStorage();
     if (session && session.expiresAt > Date.now()) {
@@ -29,19 +36,39 @@ export class AuthManager {
       return true;
     }
 
-    // Try to auto-login with stored credentials
-    const config = await this.getConfig();
-    if (config?.piholeUrl && config?.encryptedPassword) {
-      apiClient.setBaseUrl(config.piholeUrl);
-      // We can't auto-login without the master key
-      // User will need to re-enter password or we use a generated key
+    // Try to auto-login with stored credentials if "Remember Password" is enabled
+    if (config?.rememberPassword && config?.encryptedPassword && config?.encryptedMasterKey) {
+      const autoLoginResult = await this.tryAutoReauthenticate();
+      if (autoLoginResult) {
+        return true;
+      }
     }
 
     return false;
   }
 
   /**
+   * Attempt to automatically re-authenticate using stored credentials.
+   * Only works when "Remember Password" is enabled and master key is persisted.
+   */
+  private async tryAutoReauthenticate(): Promise<boolean> {
+    try {
+      const password = await this.getDecryptedPassword();
+      if (!password) {
+        return false;
+      }
+
+      const result = await this.authenticate(password);
+      return result.success;
+    } catch (error) {
+      console.error('Auto-reauthentication failed:', error);
+      return false;
+    }
+  }
+
+  /**
    * Save configuration (URL, encrypted password).
+   * @param rememberPassword If true, the master key is encrypted and persisted for auto-reauthentication
    */
   async saveConfig(
     piholeUrl: string,
@@ -49,27 +76,74 @@ export class AuthManager {
     options?: {
       notificationsEnabled?: boolean;
       refreshInterval?: number;
+      rememberPassword?: boolean;
     }
   ): Promise<void> {
     // Generate or use existing master key
     if (!this.masterKey) {
       this.masterKey = encryption.generateMasterPassword();
-      // Store master key in session storage (cleared on browser close)
-      await browser.storage.session.set({ masterKey: this.masterKey });
     }
+
+    // Always store master key in session storage for current session use
+    await browser.storage.session.set({ masterKey: this.masterKey });
 
     // Encrypt the Pi-hole password
     const encryptedPassword = await encryption.encrypt(password, this.masterKey);
+
+    const rememberPassword = options?.rememberPassword ?? false;
+
+    // If "Remember Password" is enabled, encrypt and persist the master key
+    let encryptedMasterKey: EncryptedData | null = null;
+    if (rememberPassword) {
+      encryptedMasterKey = await encryption.encrypt(this.masterKey, EXTENSION_ENTROPY);
+    }
 
     const config: PersistedConfig = {
       piholeUrl,
       encryptedPassword,
       notificationsEnabled: options?.notificationsEnabled ?? true,
       refreshInterval: options?.refreshInterval ?? DEFAULTS.REFRESH_INTERVAL,
+      rememberPassword,
+      encryptedMasterKey,
     };
 
     await browser.storage.local.set({ [STORAGE_KEYS.CONFIG]: config });
     apiClient.setBaseUrl(piholeUrl);
+  }
+
+  /**
+   * Update the "Remember Password" setting without changing other credentials.
+   */
+  async setRememberPassword(rememberPassword: boolean): Promise<void> {
+    const config = await this.getConfig();
+    if (!config) {
+      throw new Error('No configuration found');
+    }
+
+    let encryptedMasterKey: EncryptedData | null = null;
+
+    if (rememberPassword) {
+      // Need to have the master key to encrypt it
+      if (!this.masterKey) {
+        // Try to get it from session storage
+        const result = await browser.storage.session.get('masterKey');
+        this.masterKey = (result.masterKey as string) || null;
+      }
+
+      if (!this.masterKey) {
+        throw new Error('Cannot enable Remember Password without active session');
+      }
+
+      encryptedMasterKey = await encryption.encrypt(this.masterKey, EXTENSION_ENTROPY);
+    }
+
+    const updatedConfig: PersistedConfig = {
+      ...config,
+      rememberPassword,
+      encryptedMasterKey,
+    };
+
+    await browser.storage.local.set({ [STORAGE_KEYS.CONFIG]: updatedConfig });
   }
 
   /**
@@ -227,13 +301,29 @@ export class AuthManager {
 
   /**
    * Get decrypted password (for re-authentication).
-   * Only works if master key is in session storage.
+   * Works if master key is in session storage, or if "Remember Password" is enabled
+   * and the encrypted master key is in local storage.
    */
   async getDecryptedPassword(): Promise<string | null> {
-    // Try to get master key from session
+    // Try to get master key from session first
     if (!this.masterKey) {
       const result = await browser.storage.session.get('masterKey');
       this.masterKey = (result.masterKey as string) || null;
+    }
+
+    // If not in session, try to decrypt from persistent storage (Remember Password)
+    if (!this.masterKey) {
+      const config = await this.getConfig();
+      if (config?.rememberPassword && config?.encryptedMasterKey) {
+        try {
+          this.masterKey = await encryption.decrypt(config.encryptedMasterKey, EXTENSION_ENTROPY);
+          // Also store in session for subsequent use
+          await browser.storage.session.set({ masterKey: this.masterKey });
+        } catch {
+          // Decryption failed, master key is lost
+          return null;
+        }
+      }
     }
 
     if (!this.masterKey) {
@@ -250,6 +340,42 @@ export class AuthManager {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Check if "Remember Password" is enabled in the configuration.
+   */
+  async isRememberPasswordEnabled(): Promise<boolean> {
+    const config = await this.getConfig();
+    return config?.rememberPassword ?? false;
+  }
+
+  /**
+   * Proactively renew session before it expires.
+   * Called by the keepalive handler when session is about to expire.
+   */
+  async renewSessionBeforeExpiry(): Promise<boolean> {
+    const session = await this.getSessionFromStorage();
+    if (!session) {
+      return false;
+    }
+
+    const timeUntilExpiry = session.expiresAt - Date.now();
+    const renewalThreshold = DEFAULTS.SESSION_RENEWAL_THRESHOLD * 1000;
+
+    // Only renew if within the renewal threshold
+    if (timeUntilExpiry > renewalThreshold) {
+      return true; // Session still valid, no renewal needed
+    }
+
+    // Try to re-authenticate
+    const password = await this.getDecryptedPassword();
+    if (!password) {
+      return false;
+    }
+
+    const result = await this.authenticate(password);
+    return result.success;
   }
 }
 
