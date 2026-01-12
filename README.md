@@ -129,7 +129,47 @@ console.log('[PiSentinel]', 'Debug message', { data });
 | `npm run build` | Production build to `dist/` (minified, no sourcemaps) |
 | `npm run dev` | Watch mode for development (unminified, inline sourcemaps) |
 | `npm run lint` | Run ESLint on TypeScript files |
-| `npm run package` | Build and create `pisentinel.xpi` for distribution |
+| `npm run package` | Build and create unsigned `pisentinel.xpi` for distribution |
+| `npm run sign` | Build and sign extension with Mozilla (requires AMO credentials) |
+| `npm run sign:channel` | Build and sign as unlisted (for self-distribution) |
+
+### Signing the Extension
+
+To distribute your extension outside of development, you'll need to sign it with Mozilla:
+
+#### Setup Signing Credentials
+
+1. **Get API credentials** from [Mozilla Add-ons Developer Hub](https://addons.mozilla.org/developers/addon/api/key/)
+   - Sign in to your Mozilla account
+   - Navigate to API Key Management
+   - Generate new credentials (API Key + Secret)
+
+2. **Configure environment variables**
+   ```bash
+   # Copy the example file
+   cp .env.example .env
+
+   # Edit .env and add your credentials
+   AMO_API_KEY=your_api_key_here
+   AMO_API_SECRET=your_api_secret_here
+   ```
+
+3. **Sign the extension**
+   ```bash
+   # For public distribution (listed on AMO)
+   npm run sign
+
+   # For self-distribution (unlisted)
+   npm run sign:channel
+   ```
+
+The signed `.xpi` file will be created in the `web-ext-artifacts/` directory.
+
+#### Alternative: Load Unsigned Extension (Development Only)
+
+For testing without signing:
+- **Firefox Developer/Nightly Edition**: Load temporary add-on via `about:debugging`
+- **Firefox Release**: Must disable signature verification in `about:config` (set `xpinstall.signatures.required` to `false`)
 
 ### Project Structure
 

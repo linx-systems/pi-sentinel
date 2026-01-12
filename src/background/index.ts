@@ -23,38 +23,52 @@ import type { ExtensionState } from '../shared/types';
 // ===== Initialization =====
 
 async function initialize(): Promise<void> {
-  console.log('PiSentinel: Initializing background script');
+  try {
+    console.log('[PiSentinel] Starting background script initialization');
 
-  // Initialize services
-  await notificationService.initialize();
-  domainTracker.initialize();
+    // Initialize services
+    console.log('[PiSentinel] Initializing notification service');
+    await notificationService.initialize();
 
-  // Set up auth re-authentication handler
-  apiClient.setAuthRequiredHandler(async () => {
-    const password = await authManager.getDecryptedPassword();
-    if (password) {
-      const result = await authManager.authenticate(password);
-      return result.success;
+    console.log('[PiSentinel] Initializing domain tracker');
+    domainTracker.initialize();
+
+    // Set up auth re-authentication handler
+    console.log('[PiSentinel] Setting up auth handler');
+    apiClient.setAuthRequiredHandler(async () => {
+      const password = await authManager.getDecryptedPassword();
+      if (password) {
+        const result = await authManager.authenticate(password);
+        return result.success;
+      }
+      return false;
+    });
+
+    // Try to restore session
+    console.log('[PiSentinel] Attempting to restore session');
+    const hasSession = await authManager.initialize();
+    if (hasSession) {
+      console.log('[PiSentinel] Session restored successfully');
+      store.setState({ isConnected: true });
+      await refreshStats();
+    } else {
+      console.log('[PiSentinel] No session to restore');
     }
-    return false;
-  });
 
-  // Try to restore session
-  const hasSession = await authManager.initialize();
-  if (hasSession) {
-    store.setState({ isConnected: true });
-    await refreshStats();
+    // Subscribe to state changes for badge updates
+    console.log('[PiSentinel] Setting up state subscription');
+    store.subscribe((state) => {
+      badgeService.update(state);
+    });
+
+    // Initial badge update
+    await badgeService.update(store.getState());
+
+    console.log('[PiSentinel] Background script initialized successfully');
+  } catch (error) {
+    console.error('[PiSentinel] Initialization error (message listener will still work):', error);
+    // Don't re-throw - allow message listener to still function
   }
-
-  // Subscribe to state changes for badge updates
-  store.subscribe((state) => {
-    badgeService.update(state);
-  });
-
-  // Initial badge update
-  await badgeService.update(store.getState());
-
-  console.log('PiSentinel: Background script initialized');
 }
 
 // ===== Message Handling =====
@@ -63,6 +77,7 @@ async function handleMessage(
   message: Message,
   _sender: browser.Runtime.MessageSender
 ): Promise<MessageResponse<unknown>> {
+  console.log('[Background] handleMessage called with type:', message.type);
   try {
     switch (message.type) {
       case 'AUTHENTICATE':
@@ -110,13 +125,25 @@ async function handleMessage(
       case 'TEST_CONNECTION':
         return await handleTestConnection(message.payload.url);
 
+      case 'HEALTH_CHECK':
+        return {
+          success: true,
+          data: {
+            ready: true,
+            timestamp: Date.now(),
+            version: '0.0.1'
+          }
+        };
+
       default:
         return { success: false, error: 'Unknown message type' };
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Message handler error:', error);
+    console.error('[Background] Message handler error:', error);
     return { success: false, error: errorMessage };
+  } finally {
+    console.log('[Background] handleMessage completed for type:', message.type);
   }
 }
 
@@ -149,6 +176,19 @@ async function handleLogout(): Promise<MessageResponse<void>> {
   await stopStatsPolling();
   store.reset();
   await badgeService.clear();
+
+  // Clean up storage-based communication artifacts
+  await browser.storage.local.remove([
+    'authResponse',
+    'configResponse',
+    'logoutResponse',
+    'testConnectionResponse',
+    'pendingAuth',
+    'pendingConfig',
+    'pendingLogout',
+    'pendingTestConnection',
+  ]);
+
   return { success: true };
 }
 
@@ -247,7 +287,7 @@ async function handleSearchDomain(
   const result = await apiClient.searchDomain(domain);
 
   if (result.success && result.data) {
-    const data = result.data as Record<string, unknown>;
+    const data = result.data as unknown as Record<string, unknown>;
     console.log('Search API response:', JSON.stringify(data, null, 2));
 
     // Handle Pi-hole v6 API response structure
@@ -301,6 +341,7 @@ async function handleSaveConfig(payload: {
     notificationService.setEnabled(payload.notificationsEnabled ?? true);
     return { success: true };
   } catch (error) {
+    console.error('[Background] Error in handleSaveConfig:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to save config',
@@ -389,15 +430,136 @@ async function handleAlarm(alarm: browser.Alarms.Alarm): Promise<void> {
 // ===== Event Listeners =====
 
 // Register message listener at top level (required for event pages)
-// Must return a Promise for async responses to work correctly
+console.log('[Background] Registering message listener');
+
+// Use Chrome/Firefox compatible sendResponse pattern
 browser.runtime.onMessage.addListener(
-  (message: unknown, sender: browser.Runtime.MessageSender): Promise<MessageResponse<unknown>> => {
-    return handleMessage(message as Message, sender);
+  (message: unknown, sender: browser.Runtime.MessageSender, sendResponse: (response: any) => void) => {
+    console.log('[Background] Listener received message:', message);
+
+    // Handle async with sendResponse callback
+    handleMessage(message as Message, sender)
+      .then((response) => {
+        console.log('[Background] Calling sendResponse with:', response);
+        sendResponse(response);
+      })
+      .catch((error) => {
+        console.error('[Background] Error handling message:', error);
+        sendResponse({ success: false, error: error.message });
+      });
+
+    // CRITICAL: Return true to indicate we will call sendResponse asynchronously
+    return true;
   }
 );
+console.log('[Background] Message listener registered');
 
 // Register alarm listener at top level
 browser.alarms.onAlarm.addListener(handleAlarm);
+
+// WORKAROUND: Listen for storage changes for config saves and auth (browser.runtime.sendMessage is broken)
+browser.storage.onChanged.addListener(async (changes, areaName) => {
+  if (areaName === 'local') {
+    // Handle config saves
+    if (changes.pendingConfig) {
+      const config = changes.pendingConfig.newValue as { piholeUrl: string; password: string; rememberPassword?: boolean; timestamp: number } | undefined;
+      if (config) {
+        console.log('[Background] Received config via storage:', config);
+        try {
+          const response = await handleSaveConfig({
+            piholeUrl: config.piholeUrl,
+            password: config.password,
+            rememberPassword: config.rememberPassword,
+          });
+          console.log('[Background] Sending response via storage:', response);
+          await browser.storage.local.set({ configResponse: response });
+          // Clean up
+          await browser.storage.local.remove('pendingConfig');
+        } catch (error) {
+          console.error('[Background] Error processing config:', error);
+          await browser.storage.local.set({
+            configResponse: {
+              success: false,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            },
+          });
+        }
+      }
+    }
+
+    // Handle authentication
+    if (changes.pendingAuth) {
+      const auth = changes.pendingAuth.newValue as { password: string; totp?: string; timestamp: number } | undefined;
+      if (auth) {
+        console.log('[Background] Received auth via storage');
+        try {
+          const response = await handleAuthenticate({
+            password: auth.password,
+            totp: auth.totp,
+          });
+          console.log('[Background] Sending auth response via storage:', response);
+          await browser.storage.local.set({ authResponse: response });
+          // Clean up
+          await browser.storage.local.remove('pendingAuth');
+        } catch (error) {
+          console.error('[Background] Error processing auth:', error);
+          await browser.storage.local.set({
+            authResponse: {
+              success: false,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            },
+          });
+        }
+      }
+    }
+
+    // Handle test connection
+    if (changes.pendingTestConnection) {
+      const test = changes.pendingTestConnection.newValue as { url: string; timestamp: number } | undefined;
+      if (test) {
+        console.log('[Background] Received test connection via storage');
+        try {
+          const response = await handleTestConnection(test.url);
+          console.log('[Background] Sending test response via storage:', response);
+          await browser.storage.local.set({ testConnectionResponse: response });
+          // Clean up
+          await browser.storage.local.remove('pendingTestConnection');
+        } catch (error) {
+          console.error('[Background] Error processing test:', error);
+          await browser.storage.local.set({
+            testConnectionResponse: {
+              success: false,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            },
+          });
+        }
+      }
+    }
+
+    // Handle logout
+    if (changes.pendingLogout) {
+      const logout = changes.pendingLogout.newValue as { timestamp: number } | undefined;
+      if (logout) {
+        console.log('[Background] Received logout via storage');
+        try {
+          const response = await handleLogout();
+          console.log('[Background] Sending logout response via storage:', response);
+          await browser.storage.local.set({ logoutResponse: response });
+          // Clean up
+          await browser.storage.local.remove('pendingLogout');
+        } catch (error) {
+          console.error('[Background] Error processing logout:', error);
+          await browser.storage.local.set({
+            logoutResponse: {
+              success: false,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            },
+          });
+        }
+      }
+    }
+  }
+});
 
 // Initialize on startup
 browser.runtime.onStartup.addListener(initialize);

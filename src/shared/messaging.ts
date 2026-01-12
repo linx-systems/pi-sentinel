@@ -23,6 +23,7 @@ export type MessageType =
   | 'GET_QUERIES'
   | 'SAVE_CONFIG'
   | 'TEST_CONNECTION'
+  | 'HEALTH_CHECK'
   | 'STATE_UPDATED'
   | 'TAB_DOMAINS_UPDATED';
 
@@ -83,6 +84,7 @@ export type Message =
   | { type: 'GET_QUERIES'; payload?: GetQueriesPayload }
   | { type: 'SAVE_CONFIG'; payload: SaveConfigPayload }
   | { type: 'TEST_CONNECTION'; payload: TestConnectionPayload }
+  | { type: 'HEALTH_CHECK' }
   | { type: 'STATE_UPDATED'; payload: Partial<ExtensionState> }
   | { type: 'TAB_DOMAINS_UPDATED'; payload: SerializableTabDomains };
 

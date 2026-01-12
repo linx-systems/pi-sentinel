@@ -1,7 +1,8 @@
 import * as esbuild from 'esbuild';
-import { copyFileSync, cpSync, mkdirSync, existsSync, rmSync } from 'fs';
+import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -60,24 +61,29 @@ const builds = [
 
 // Copy static files
 function copyStatic() {
-  // Copy manifest
-  copyFileSync(join(srcDir, 'manifest.json'), join(distDir, 'manifest.json'));
+  // Copy manifest using read/write to avoid Bun copyFileSync issues
+  const manifestContent = readFileSync(join(srcDir, 'manifest.json'));
+  writeFileSync(join(distDir, 'manifest.json'), manifestContent);
 
   // Copy HTML files
   mkdirSync(join(distDir, 'popup'), { recursive: true });
   mkdirSync(join(distDir, 'sidebar'), { recursive: true });
   mkdirSync(join(distDir, 'options'), { recursive: true });
 
-  copyFileSync(join(srcDir, 'popup/popup.html'), join(distDir, 'popup/popup.html'));
-  copyFileSync(join(srcDir, 'popup/popup.css'), join(distDir, 'popup/popup.css'));
-  copyFileSync(join(srcDir, 'sidebar/sidebar.html'), join(distDir, 'sidebar/sidebar.html'));
-  copyFileSync(join(srcDir, 'sidebar/sidebar.css'), join(distDir, 'sidebar/sidebar.css'));
-  copyFileSync(join(srcDir, 'options/options.html'), join(distDir, 'options/options.html'));
-  copyFileSync(join(srcDir, 'options/options.css'), join(distDir, 'options/options.css'));
+  // Use read/write for all file copies to avoid Bun copyFileSync issues
+  const copyFile = (src, dest) => writeFileSync(dest, readFileSync(src));
 
-  // Copy icons
+  copyFile(join(srcDir, 'popup/popup.html'), join(distDir, 'popup/popup.html'));
+  copyFile(join(srcDir, 'popup/popup.css'), join(distDir, 'popup/popup.css'));
+  copyFile(join(srcDir, 'sidebar/sidebar.html'), join(distDir, 'sidebar/sidebar.html'));
+  copyFile(join(srcDir, 'sidebar/sidebar.css'), join(distDir, 'sidebar/sidebar.css'));
+  copyFile(join(srcDir, 'options/options.html'), join(distDir, 'options/options.html'));
+  copyFile(join(srcDir, 'options/options.css'), join(distDir, 'options/options.css'));
+
+  // Copy icons using shell command to avoid Bun filesystem issues
   if (existsSync(join(srcDir, 'icons'))) {
-    cpSync(join(srcDir, 'icons'), join(distDir, 'icons'), { recursive: true });
+    mkdirSync(join(distDir, 'icons'), { recursive: true });
+    execSync(`cp -r "${join(srcDir, 'icons')}"/* "${join(distDir, 'icons')}"`);
   }
 
   console.log('Static files copied');

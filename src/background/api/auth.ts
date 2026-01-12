@@ -219,6 +219,21 @@ export class AuthManager {
     await apiClient.logout();
     await this.clearSession();
     await this.stopSessionKeepalive();
+    // Clear master key to prevent auto-reauthentication
+    this.masterKey = null;
+    await browser.storage.session.remove('masterKey');
+
+    // Clear encrypted credentials from config
+    const config = await this.getConfig();
+    if (config) {
+      const cleanedConfig = {
+        ...config,
+        encryptedPassword: null,
+        encryptedMasterKey: null,
+        rememberPassword: false,
+      };
+      await browser.storage.local.set({ [STORAGE_KEYS.CONFIG]: cleanedConfig });
+    }
   }
 
   /**

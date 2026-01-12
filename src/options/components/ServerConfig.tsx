@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useState} from 'preact/hooks';
 import browser from 'webextension-polyfill';
 import type { MessageResponse } from '../../shared/messaging';
 
@@ -27,10 +27,38 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
         testUrl = `http://${testUrl}`;
       }
 
-      const response = (await browser.runtime.sendMessage({
-        type: 'TEST_CONNECTION',
-        payload: { url: testUrl },
-      })) as MessageResponse<void>;
+      // Use storage-based communication
+      console.log('[ServerConfig] Testing connection via storage');
+      await browser.storage.local.remove('testConnectionResponse');
+
+      const response = await new Promise<MessageResponse<void>>((resolve) => {
+        const timeout = setTimeout(() => {
+          console.log('[ServerConfig] Timeout waiting for test response');
+          browser.storage.onChanged.removeListener(testListener);
+          resolve({ success: false, error: 'Timeout waiting for test response' });
+        }, 10000);
+
+        const testListener = (changes: any, areaName: string) => {
+          if (areaName === 'local' && changes.testConnectionResponse) {
+            console.log('[ServerConfig] Received testConnectionResponse:', changes.testConnectionResponse.newValue);
+            clearTimeout(timeout);
+            browser.storage.onChanged.removeListener(testListener);
+            resolve(changes.testConnectionResponse.newValue);
+          }
+        };
+
+        browser.storage.onChanged.addListener(testListener);
+
+        // Write test request
+        browser.storage.local.set({
+          pendingTestConnection: {
+            url: testUrl,
+            timestamp: Date.now(),
+          },
+        }).then(() => {
+          console.log('[ServerConfig] Test request written, waiting for response');
+        });
+      });
 
       if (response.success) {
         setTestStatus('success');

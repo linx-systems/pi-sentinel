@@ -7,7 +7,10 @@
     "build": "bun scripts/build.js",
     "dev": "bun scripts/build.js --watch",
     "lint": "eslint src --ext .ts,.tsx",
-    "package": "bun run build && cd dist && zip -r ../pisentinel.xpi ."
+    "lint:ext": "web-ext lint",
+    "package": "bun run build && cd dist && zip -r ../pisentinel.xpi .",
+    "sign": "bun run build && web-ext sign --source-dir=dist --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET",
+    "sign:channel": "bun run build && web-ext sign --source-dir=dist --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET --channel=unlisted"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -16,7 +19,8 @@
     "eslint": "^9.17.0",
     "sharp": "^0.34.5",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.18.2"
+    "typescript-eslint": "^8.18.2",
+    "web-ext": "^9.2.0"
   },
   "dependencies": {
     "preact": "^10.25.4",

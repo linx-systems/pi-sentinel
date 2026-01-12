@@ -279,7 +279,7 @@ export class PiholeApiClient {
         data: Array.isArray(result.data) ? result.data : (result.data.queries || []),
       };
     }
-    return result as ApiResult<QueryEntry[]>;
+    return result as unknown as ApiResult<QueryEntry[]>;
   }
 
   // ===== Domain Lists =====
@@ -307,7 +307,7 @@ export class PiholeApiClient {
         data: Array.isArray(result.data) ? result.data : (result.data.domains || []),
       };
     }
-    return result as ApiResult<DomainEntry[]>;
+    return result as unknown as ApiResult<DomainEntry[]>;
   }
 
   /**

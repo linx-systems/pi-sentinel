@@ -1,6 +1,8 @@
 node_modules/
 dist/
 *.xpi
+web-ext-artifacts/
+.env
 .DS_Store
 .idea
 .claude/

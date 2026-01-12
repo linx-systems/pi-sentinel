@@ -58,6 +58,7 @@ class StateStore {
     this.state = this.getInitialState();
     this.tabDomains.clear();
     this.notifyListeners();
+    this.broadcastStateUpdate();
   }
 
   /**

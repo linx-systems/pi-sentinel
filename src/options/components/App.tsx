@@ -15,15 +15,43 @@ export function App() {
   const [savedUrl, setSavedUrl] = useState('');
 
   useEffect(() => {
-    // Load current state
-    loadState();
+    // Check background script health and load state
+    checkBackgroundHealth();
   }, []);
+
+  const checkBackgroundHealth = async () => {
+    try {
+      console.log('[Options] Checking background script health');
+      const healthCheck = (await browser.runtime.sendMessage({ type: 'HEALTH_CHECK' })) as MessageResponse<{
+        ready: boolean;
+        timestamp: number;
+        version: string;
+      }>;
+
+      if (!healthCheck || !healthCheck.success) {
+        setMessage({
+          type: 'error',
+          text: 'Background script not ready. Please reload the extension.',
+        });
+        return;
+      }
+
+      console.log('[Options] Background script is ready, loading state');
+      await loadState();
+    } catch (error) {
+      console.error('[Options] Health check failed:', error);
+      setMessage({
+        type: 'error',
+        text: 'Cannot communicate with background script. Please reload the extension.',
+      });
+    }
+  };
 
   const loadState = async () => {
     try {
       const response = (await browser.runtime.sendMessage({
         type: 'GET_STATE',
-      })) as MessageResponse<ExtensionState> | undefined;
+      })) as MessageResponse<ExtensionState>;
 
       if (response?.success && response.data) {
         if (response.data.isConnected) {
@@ -38,30 +66,92 @@ export function App() {
   };
 
   const handleSaveAndConnect = async (url: string, password: string, rememberPassword: boolean) => {
+    console.log('[Options] handleSaveAndConnect called', { url, rememberPassword });
     setIsLoading(true);
     setMessage(null);
     setSavedUrl(url);
 
     try {
-      // Save config
-      const saveResponse = (await browser.runtime.sendMessage({
-        type: 'SAVE_CONFIG',
-        payload: { piholeUrl: url, password, rememberPassword },
-      })) as MessageResponse<void> | undefined;
+      // WORKAROUND: Use storage-based communication instead of messages
+      console.log('[Options] Setting up storage listener and writing config');
 
-      if (!saveResponse) {
-        throw new Error('Background script not ready. Please try again.');
-      }
+      // Clean up any old response first
+      await browser.storage.local.remove('configResponse');
+
+      // Set up listener BEFORE writing config
+      const saveResponse = await new Promise<MessageResponse<void>>((resolve) => {
+        const timeout = setTimeout(() => {
+          console.log('[Options] Timeout waiting for response');
+          browser.storage.onChanged.removeListener(listener);
+          resolve({ success: false, error: 'Timeout waiting for background response' });
+        }, 10000);
+
+        const listener = (changes: any, areaName: string) => {
+          console.log('[Options] Storage changed:', changes, areaName);
+          if (areaName === 'local' && changes.configResponse) {
+            console.log('[Options] Received configResponse:', changes.configResponse.newValue);
+            clearTimeout(timeout);
+            browser.storage.onChanged.removeListener(listener);
+            resolve(changes.configResponse.newValue);
+          }
+        };
+
+        browser.storage.onChanged.addListener(listener);
+
+        // Now write the config (listener is ready)
+        console.log('[Options] Writing config to storage');
+        browser.storage.local.set({
+          pendingConfig: {
+            piholeUrl: url,
+            password,
+            rememberPassword,
+            timestamp: Date.now(),
+          },
+        }).then(() => {
+          console.log('[Options] Config written, waiting for response');
+        });
+      });
+
+      console.log('[Options] SAVE_CONFIG response:', saveResponse);
 
       if (!saveResponse.success) {
         throw new Error(saveResponse.error || 'Failed to save configuration');
       }
 
-      // Authenticate
-      const authResponse = (await browser.runtime.sendMessage({
-        type: 'AUTHENTICATE',
-        payload: { password },
-      })) as MessageResponse<{ totpRequired?: boolean }> | undefined;
+      // Authenticate using storage-based communication
+      console.log('[Options] Starting authentication via storage');
+      await browser.storage.local.remove('authResponse');
+
+      const authResponse = await new Promise<MessageResponse<{ totpRequired?: boolean }>>((resolve) => {
+        const timeout = setTimeout(() => {
+          console.log('[Options] Timeout waiting for auth response');
+          browser.storage.onChanged.removeListener(authListener);
+          resolve({ success: false, error: 'Timeout waiting for authentication response' });
+        }, 10000);
+
+        const authListener = (changes: any, areaName: string) => {
+          if (areaName === 'local' && changes.authResponse) {
+            console.log('[Options] Received authResponse:', changes.authResponse.newValue);
+            clearTimeout(timeout);
+            browser.storage.onChanged.removeListener(authListener);
+            resolve(changes.authResponse.newValue);
+          }
+        };
+
+        browser.storage.onChanged.addListener(authListener);
+
+        // Write auth request
+        browser.storage.local.set({
+          pendingAuth: {
+            password,
+            timestamp: Date.now(),
+          },
+        }).then(() => {
+          console.log('[Options] Auth request written, waiting for response');
+        });
+      });
+
+      console.log('[Options] AUTHENTICATE response:', authResponse);
 
       if (!authResponse) {
         throw new Error('Background script not ready. Please try again.');
@@ -93,10 +183,39 @@ export function App() {
     setMessage(null);
 
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: 'AUTHENTICATE',
-        payload: { password, totp },
-      })) as MessageResponse<void> | undefined;
+      // Use storage-based communication for TOTP auth
+      console.log('[Options] Starting TOTP authentication via storage');
+      await browser.storage.local.remove('authResponse');
+
+      const response = await new Promise<MessageResponse<void>>((resolve) => {
+        const timeout = setTimeout(() => {
+          console.log('[Options] Timeout waiting for TOTP auth response');
+          browser.storage.onChanged.removeListener(totpListener);
+          resolve({ success: false, error: 'Timeout waiting for authentication response' });
+        }, 10000);
+
+        const totpListener = (changes: any, areaName: string) => {
+          if (areaName === 'local' && changes.authResponse) {
+            console.log('[Options] Received TOTP authResponse:', changes.authResponse.newValue);
+            clearTimeout(timeout);
+            browser.storage.onChanged.removeListener(totpListener);
+            resolve(changes.authResponse.newValue);
+          }
+        };
+
+        browser.storage.onChanged.addListener(totpListener);
+
+        // Write TOTP auth request
+        browser.storage.local.set({
+          pendingAuth: {
+            password,
+            totp,
+            timestamp: Date.now(),
+          },
+        }).then(() => {
+          console.log('[Options] TOTP auth request written, waiting for response');
+        });
+      });
 
       if (!response) {
         throw new Error('Background script not ready. Please try again.');
@@ -122,9 +241,44 @@ export function App() {
 
   const handleDisconnect = async () => {
     try {
-      await browser.runtime.sendMessage({ type: 'LOGOUT' });
-      setConnectionState('disconnected');
-      setMessage({ type: 'info', text: 'Disconnected from Pi-hole' });
+      // Use storage-based communication for logout
+      console.log('[Options] Logging out via storage');
+      await browser.storage.local.remove('logoutResponse');
+
+      const response = await new Promise<MessageResponse<void>>((resolve) => {
+        const timeout = setTimeout(() => {
+          console.log('[Options] Timeout waiting for logout response');
+          browser.storage.onChanged.removeListener(logoutListener);
+          resolve({ success: false, error: 'Timeout waiting for logout response' });
+        }, 10000);
+
+        const logoutListener = (changes: any, areaName: string) => {
+          if (areaName === 'local' && changes.logoutResponse) {
+            console.log('[Options] Received logoutResponse:', changes.logoutResponse.newValue);
+            clearTimeout(timeout);
+            browser.storage.onChanged.removeListener(logoutListener);
+            resolve(changes.logoutResponse.newValue);
+          }
+        };
+
+        browser.storage.onChanged.addListener(logoutListener);
+
+        // Write logout request
+        browser.storage.local.set({
+          pendingLogout: {
+            timestamp: Date.now(),
+          },
+        }).then(() => {
+          console.log('[Options] Logout request written, waiting for response');
+        });
+      });
+
+      if (response.success) {
+        setConnectionState('disconnected');
+        setMessage({ type: 'info', text: 'Disconnected from Pi-hole' });
+      } else {
+        console.error('Logout failed:', response.error);
+      }
     } catch (err) {
       console.error('Logout failed:', err);
     }
