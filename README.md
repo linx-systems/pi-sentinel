@@ -17,13 +17,26 @@ A Firefox Manifest V3 extension for Pi-hole v6 integration. Monitor DNS blocking
 - Firefox 115 or later
 - Pi-hole v6 with the new REST API
 
+## Prerequisites
+
+Before installing, ensure you have:
+
+- **Node.js** 18.x or later (LTS recommended)
+- **npm** 9.x or later (comes with Node.js)
+
+Verify your installation:
+```bash
+node --version  # Should output v18.x.x or higher
+npm --version   # Should output 9.x.x or higher
+```
+
 ## Installation
 
 ### From Source
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/pisentinel.git
+   git clone https://github.com/nicokosi/pisentinel.git
    cd pisentinel
    ```
 
@@ -43,12 +56,102 @@ A Firefox Manifest V3 extension for Pi-hole v6 integration. Monitor DNS blocking
    - Click "Load Temporary Add-on..."
    - Select the `dist/manifest.json` file
 
-### For Development
+## Development
 
-Use watch mode for automatic rebuilds:
+### Quick Start
+
 ```bash
+# Install dependencies
+npm install
+
+# Start development mode with file watching
 npm run dev
+
+# In another terminal, or after changes, reload the extension in Firefox
 ```
+
+### Development Workflow
+
+1. **Start watch mode**
+   ```bash
+   npm run dev
+   ```
+   This watches for file changes and automatically rebuilds. Output is unminified with inline sourcemaps for debugging.
+
+2. **Load the extension in Firefox**
+   - Navigate to `about:debugging#/runtime/this-firefox`
+   - Click "Load Temporary Add-on..."
+   - Select `dist/manifest.json`
+
+3. **Reload after changes**
+   - After esbuild rebuilds (watch the terminal for "Build complete"), click the "Reload" button next to PiSentinel in `about:debugging`
+   - For popup/sidebar changes, close and reopen the popup/sidebar
+   - For background script changes, always reload the extension
+
+### Debugging
+
+#### Background Script
+1. Go to `about:debugging#/runtime/this-firefox`
+2. Find PiSentinel and click "Inspect"
+3. This opens DevTools for the background script where you can:
+   - View console logs
+   - Set breakpoints
+   - Inspect network requests to Pi-hole API
+
+#### Popup / Sidebar / Options
+1. Right-click inside the popup/sidebar/options page
+2. Select "Inspect" to open DevTools for that specific UI
+
+#### Logging
+
+The extension uses `console.log/warn/error` for logging. In development mode, useful logs include:
+
+- **API calls**: Check the Network tab in background script DevTools
+- **State changes**: Add `console.log` statements in `src/background/state/`
+- **Message passing**: Log in `src/background/index.ts` message handlers
+
+To add temporary debug logging:
+```typescript
+// In any source file
+console.log('[PiSentinel]', 'Debug message', { data });
+```
+
+### Available Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run build` | Production build to `dist/` (minified, no sourcemaps) |
+| `npm run dev` | Watch mode for development (unminified, inline sourcemaps) |
+| `npm run lint` | Run ESLint on TypeScript files |
+| `npm run package` | Build and create `pisentinel.xpi` for distribution |
+
+### Project Structure
+
+```
+src/
+├── background/           # Background script (service worker)
+│   ├── api/              # Pi-hole API client
+│   ├── crypto/           # Credential encryption (PBKDF2 + AES-256-GCM)
+│   ├── services/         # Badge, notifications, domain tracking
+│   └── state/            # State management
+├── popup/                # Popup UI (Preact)
+├── sidebar/              # Sidebar UI (Preact)
+├── options/              # Options page (Preact)
+├── shared/               # Shared types, constants, messaging utilities
+├── icons/                # Extension icons (SVG source, PNG exports)
+└── manifest.json         # Extension manifest (MV3)
+
+scripts/
+├── build.js              # esbuild configuration and build script
+└── convert-icons.js      # SVG to PNG icon conversion
+```
+
+### Tech Stack
+
+- **TypeScript** - Type-safe JavaScript with strict mode
+- **Preact** - Lightweight React alternative (~3KB gzipped)
+- **esbuild** - Fast bundler (~10ms rebuilds)
+- **webextension-polyfill** - Cross-browser WebExtensions API compatibility
 
 ## Configuration
 
@@ -84,37 +187,6 @@ The toolbar badge shows:
 - **Red background**: Blocking disabled
 - **Gray background**: Not connected
 
-## Development
-
-### Project Structure
-```
-src/
-├── background/           # Background script (event page)
-│   ├── api/              # Pi-hole API client
-│   ├── crypto/           # Credential encryption
-│   ├── services/         # Badge, notifications, domain tracking
-│   └── state/            # State management
-├── popup/                # Popup UI (Preact)
-├── sidebar/              # Sidebar UI (Preact)
-├── options/              # Options page (Preact)
-├── shared/               # Shared types, constants, messaging
-└── icons/                # Extension icons
-```
-
-### Scripts
-| Command | Description |
-|---------|-------------|
-| `npm run build` | Production build to `dist/` |
-| `npm run dev` | Watch mode for development |
-| `npm run lint` | Run ESLint |
-| `npm run package` | Create `.xpi` file for distribution |
-
-### Tech Stack
-- **TypeScript** - Type-safe JavaScript
-- **Preact** - Lightweight React alternative (~3KB)
-- **esbuild** - Fast bundler
-- **webextension-polyfill** - Cross-browser WebExtensions API
-
 ## Security
 
 - Credentials are encrypted using PBKDF2 (100,000 iterations) + AES-256-GCM
@@ -146,13 +218,37 @@ src/
 - The extension automatically refreshes sessions every 4 minutes
 - If issues persist, check Pi-hole's session timeout settings
 
+### Extension not updating after code changes
+- Ensure `npm run dev` is running and shows successful rebuilds
+- Click "Reload" in `about:debugging` after each change
+- For popup changes, close and reopen the popup
+
+### Console errors not visible
+- Background script logs: Inspect via `about:debugging`
+- Popup/sidebar logs: Right-click → Inspect within the UI
+
 ### macOS users
 - Recent macOS versions may require granting Firefox "Local Network" permission in System Preferences → Privacy & Security
+
+## Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. **Fork the repository** and clone your fork
+2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
+3. **Make your changes** following the existing code style
+4. **Run linting**: `npm run lint` and fix any issues
+5. **Test manually** in Firefox using the development workflow above
+6. **Commit your changes** with a descriptive message
+7. **Push to your fork** and open a Pull Request
+
+### Code Style
+
+- Use TypeScript strict mode
+- Follow existing patterns in the codebase
+- Keep components small and focused
+- Use meaningful variable and function names
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request.
