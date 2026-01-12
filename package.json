@@ -4,10 +4,10 @@
   "description": "Firefox MV3 extension for Pi-hole v6 integration",
   "type": "module",
   "scripts": {
-    "build": "node scripts/build.js",
-    "dev": "node scripts/build.js --watch",
+    "build": "bun scripts/build.js",
+    "dev": "bun scripts/build.js --watch",
     "lint": "eslint src --ext .ts,.tsx",
-    "package": "npm run build && cd dist && zip -r ../pisentinel.xpi ."
+    "package": "bun run build && cd dist && zip -r ../pisentinel.xpi ."
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
