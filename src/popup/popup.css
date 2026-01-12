@@ -246,19 +246,21 @@ body {
 .footer {
   display: flex;
   justify-content: center;
+  gap: 16px;
   padding-top: 8px;
 }
 
-.sidebar-link {
+.footer-link {
   color: #888;
   text-decoration: none;
   font-size: 12px;
   display: flex;
   align-items: center;
   gap: 4px;
+  transition: color 0.2s;
 }
 
-.sidebar-link:hover {
+.footer-link:hover {
   color: #fff;
 }
 

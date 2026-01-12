@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import browser from 'webextension-polyfill';
 import { StatsCard } from './StatsCard';
 import { BlockingToggle } from './BlockingToggle';
-import type { ExtensionState } from '../../shared/types';
+import type { ExtensionState, PersistedConfig } from '../../shared/types';
 import type { MessageResponse } from '../../shared/messaging';
 
 type ViewState = 'loading' | 'not-configured' | 'connected' | 'error';
@@ -11,9 +11,17 @@ export function App() {
   const [state, setState] = useState<ExtensionState | null>(null);
   const [viewState, setViewState] = useState<ViewState>('loading');
   const [error, setError] = useState<string | null>(null);
+  const [piholeUrl, setPiholeUrl] = useState<string | null>(null);
 
   const fetchState = useCallback(async () => {
     try {
+      // Fetch Pi-hole URL from storage
+      const storage = await browser.storage.local.get('pisentinel_config');
+      const config = storage.pisentinel_config as PersistedConfig | undefined;
+      if (config?.piholeUrl) {
+        setPiholeUrl(config.piholeUrl);
+      }
+
       const response = (await browser.runtime.sendMessage({
         type: 'GET_STATE',
       })) as MessageResponse<ExtensionState>;
@@ -65,6 +73,12 @@ export function App() {
     } catch {
       // Fallback: open sidebar panel in new tab
       browser.tabs.create({ url: browser.runtime.getURL('sidebar/sidebar.html') });
+    }
+  };
+
+  const openAdminPage = () => {
+    if (piholeUrl) {
+      browser.tabs.create({ url: `${piholeUrl}/admin` });
     }
   };
 
@@ -149,10 +163,16 @@ export function App() {
       />
 
       <footer class="footer">
-        <a href="#" class="sidebar-link" onClick={(e) => { e.preventDefault(); openSidebar(); }}>
+        <a href="#" class="footer-link" onClick={(e) => { e.preventDefault(); openSidebar(); }}>
           <DomainIcon />
-          View domains for current tab
+          View domains
         </a>
+        {piholeUrl && (
+          <a href="#" class="footer-link" onClick={(e) => { e.preventDefault(); openAdminPage(); }}>
+            <ExternalLinkIcon />
+            Pi-hole Admin
+          </a>
+        )}
       </footer>
     </div>
   );
@@ -183,6 +203,16 @@ function DomainIcon() {
       <circle cx="12" cy="12" r="10" />
       <line x1="2" y1="12" x2="22" y2="12" />
       <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <polyline points="15 3 21 3 21 9" />
+      <line x1="10" y1="14" x2="21" y2="3" />
     </svg>
   );
 }
