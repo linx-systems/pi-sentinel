@@ -20,31 +20,43 @@ export function App() {
   }, []);
 
   const checkBackgroundHealth = async () => {
-    try {
-      console.log('[Options] Checking background script health');
-      const healthCheck = (await browser.runtime.sendMessage({ type: 'HEALTH_CHECK' })) as MessageResponse<{
-        ready: boolean;
-        timestamp: number;
-        version: string;
-      }>;
+    const maxRetries = 5;
+    const baseDelay = 100; // Start with 100ms
 
-      if (!healthCheck || !healthCheck.success) {
-        setMessage({
-          type: 'error',
-          text: 'Background script not ready. Please reload the extension.',
-        });
-        return;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        console.log(`[Options] Checking background script health (attempt ${attempt + 1}/${maxRetries})`);
+        const healthCheck = (await browser.runtime.sendMessage({ type: 'HEALTH_CHECK' })) as MessageResponse<{
+          ready: boolean;
+          timestamp: number;
+          version: string;
+        }>;
+
+        if (healthCheck && healthCheck.success) {
+          console.log('[Options] Background script is ready, loading state');
+          await loadState();
+          return;
+        }
+
+        console.warn('[Options] Health check returned unsuccessful response, retrying...');
+      } catch (error) {
+        console.warn(`[Options] Health check attempt ${attempt + 1} failed:`, error);
       }
 
-      console.log('[Options] Background script is ready, loading state');
-      await loadState();
-    } catch (error) {
-      console.error('[Options] Health check failed:', error);
-      setMessage({
-        type: 'error',
-        text: 'Cannot communicate with background script. Please reload the extension.',
-      });
+      // Wait before retrying (exponential backoff)
+      if (attempt < maxRetries - 1) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.log(`[Options] Waiting ${delay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
+
+    // All retries failed
+    console.error('[Options] All health check attempts failed');
+    setMessage({
+      type: 'error',
+      text: 'Background script not ready. Please reload the extension.',
+    });
   };
 
   const loadState = async () => {
