@@ -326,6 +326,52 @@ body {
   color: #666;
 }
 
+/* Auto-search toggle (Phase 4) */
+.auto-search-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #888;
+  cursor: pointer;
+  padding: 0 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.auto-search-toggle input[type="checkbox"] {
+  accent-color: #3b82f6;
+  cursor: pointer;
+  margin: 0;
+  width: 14px;
+  height: 14px;
+}
+
+.auto-search-toggle:hover {
+  color: #e0e0e0;
+}
+
+.auto-search-toggle:has(input:checked) {
+  color: #3b82f6;
+}
+
+/* Auto-search progress indicator */
+.auto-search-status {
+  font-size: 10px;
+  color: #3b82f6;
+  padding: 2px 6px;
+  background: rgba(59, 130, 246, 0.15);
+  border-radius: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 /* Empty State */
 .empty-state {
   text-align: center;
