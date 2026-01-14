@@ -1,18 +1,41 @@
 import { useState, useEffect } from 'preact/hooks';
 import browser from 'webextension-polyfill';
-import { ErrorIcon, CheckIcon, RefreshIcon } from '~/utils/icons';
+import { ErrorIcon, CheckIcon, RefreshIcon, BlockIcon, SearchIcon } from '~/utils/icons';
 import { isQueryBlocked } from '~/utils/utils';
 import type { QueryEntry } from '~/utils/types';
 import type { MessageResponse } from '~/utils/messaging';
 
-export function QueryLog() {
+type SearchResult = {
+  gravity: boolean;
+  allowlist: boolean;
+  denylist: boolean;
+};
+
+interface QueryLogProps {
+  onAddToList: (domain: string, listType: 'allow' | 'deny') => Promise<void>;
+}
+
+export function QueryLog({ onAddToList }: QueryLogProps) {
   const [queries, setQueries] = useState<QueryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'blocked' | 'allowed'>('all');
+  const [searchResults, setSearchResults] = useState<Map<string, SearchResult>>(new Map());
 
   useEffect(() => {
     loadQueries();
   }, []);
+
+  const setSearchResult = (domain: string, result: SearchResult | null) => {
+    setSearchResults((prev) => {
+      const next = new Map(prev);
+      if (result) {
+        next.set(domain, result);
+      } else {
+        next.delete(domain);
+      }
+      return next;
+    });
+  };
 
   const loadQueries = async () => {
     setIsLoading(true);
@@ -91,7 +114,15 @@ export function QueryLog() {
       ) : (
         <div style={{ padding: '0 8px 8px', overflow: 'auto', flex: 1 }}>
           {filteredQueries.map((query, index) =>
-            query ? <QueryItem key={query.id || index} query={query} /> : null
+            query ? (
+              <QueryItem
+                key={query.id || index}
+                query={query}
+                onAddToList={onAddToList}
+                searchResult={searchResults.get(query.domain) || null}
+                onSearchResult={(result) => setSearchResult(query.domain, result)}
+              />
+            ) : null
           )}
         </div>
       )}
@@ -101,9 +132,12 @@ export function QueryLog() {
 
 interface QueryItemProps {
   query: QueryEntry;
+  onAddToList: (domain: string, listType: 'allow' | 'deny') => Promise<void>;
+  searchResult: SearchResult | null;
+  onSearchResult: (result: SearchResult | null) => void;
 }
 
-function QueryItem({ query }: QueryItemProps) {
+function QueryItem({ query, onAddToList, searchResult, onSearchResult }: QueryItemProps) {
   const blocked = isQueryBlocked(query.status);
 
   // Handle timestamp - Pi-hole v6 uses 'time' as Unix timestamp (seconds with decimals)
@@ -122,15 +156,107 @@ function QueryItem({ query }: QueryItemProps) {
     ? ((query.client as any).name || (query.client as any).ip || '?')
     : (query.client || '?');
 
+  const handleSearch = async () => {
+    try {
+      const response = (await browser.runtime.sendMessage({
+        type: 'SEARCH_DOMAIN',
+        payload: { domain: query.domain },
+      })) as MessageResponse<SearchResult> | undefined;
+
+      if (response?.success && response.data) {
+        onSearchResult(response.data);
+      }
+    } catch (err) {
+      console.error('Search failed:', err);
+    }
+  };
+
+  const handleRemove = async (listType: 'allow' | 'deny') => {
+    try {
+      const messageType = listType === 'allow' ? 'REMOVE_FROM_ALLOWLIST' : 'REMOVE_FROM_DENYLIST';
+      await browser.runtime.sendMessage({
+        type: messageType,
+        payload: { domain: query.domain },
+      });
+      // Clear search result after removal
+      onSearchResult(null);
+    } catch (err) {
+      console.error('Remove failed:', err);
+    }
+  };
+
+  const hasValidDomain = query.domain && query.domain !== 'unknown';
+
   return (
     <div class="query-item">
       <span class={`status-icon ${blocked ? 'blocked' : 'allowed'}`}>
         {blocked ? <ErrorIcon size={14} /> : <CheckIcon size={14} />}
       </span>
       <div class="details">
-        <div class="domain" title={query.domain}>
-          {query.domain || 'unknown'}
+        <div class="domain-row">
+          <div class="domain" title={query.domain}>
+            {query.domain || 'unknown'}
+          </div>
+          {hasValidDomain && (
+            <div class="domain-actions">
+              <button
+                class="action-btn allow"
+                onClick={() => onAddToList(query.domain, 'allow')}
+                title="Add to allowlist"
+              >
+                <CheckIcon size={14} />
+              </button>
+              <button
+                class="action-btn block"
+                onClick={() => onAddToList(query.domain, 'deny')}
+                title="Add to denylist"
+              >
+                <BlockIcon size={14} />
+              </button>
+              <button
+                class="action-btn search"
+                onClick={handleSearch}
+                title="Search domain status"
+              >
+                <SearchIcon size={14} />
+              </button>
+            </div>
+          )}
         </div>
+
+        {searchResult && (
+          <div class="search-result">
+            <span
+              class={searchResult.gravity ? 'status-blocked' : 'status-allowed'}
+              data-bullet={searchResult.gravity ? '●' : '○'}
+            >
+              {searchResult.gravity ? 'Blocked (gravity)' : 'Not in blocklist'}
+            </span>
+            {searchResult.allowlist && (
+              <span class="status-allowlist" data-bullet="●">
+                Allowlisted
+              </span>
+            )}
+            {searchResult.denylist && (
+              <span class="status-denylist" data-bullet="●">
+                Denylisted
+              </span>
+            )}
+            {(searchResult.allowlist || searchResult.denylist) && (
+              <button
+                class="remove-btn"
+                onClick={() => handleRemove(searchResult.allowlist ? 'allow' : 'deny')}
+                title="Remove from list"
+              >
+                Remove
+              </button>
+            )}
+            <button class="dismiss-btn" onClick={() => onSearchResult(null)} title="Dismiss">
+              ×
+            </button>
+          </div>
+        )}
+
         <div class="meta">
           {query.type || '?'} • {clientInfo} • {timeStr}
         </div>

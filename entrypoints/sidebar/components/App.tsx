@@ -162,7 +162,7 @@ function AppContent() {
             onAddToList={handleAddToList}
           />
         ) : (
-          <QueryLog />
+          <QueryLog onAddToList={handleAddToList} />
         )}
       </div>
     </div>
