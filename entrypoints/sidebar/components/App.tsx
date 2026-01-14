@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import browser from 'webextension-polyfill';
 import { DomainList } from './DomainList';
 import { QueryLog } from './QueryLog';
+import { ToastProvider, useToast } from './ToastContext';
 import type { ExtensionState } from '~/utils/types';
 import type { MessageResponse, SerializableTabDomains } from '~/utils/messaging';
 
@@ -9,12 +10,20 @@ type Tab = 'domains' | 'queries';
 type TabDomains = SerializableTabDomains;
 
 export function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
+  );
+}
+
+function AppContent() {
   const [activeTab, setActiveTab] = useState<Tab>('domains');
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [tabDomains, setTabDomains] = useState<TabDomains | null>(null);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const initialLoadComplete = useRef(false);
+  const { showToast } = useToast();
 
   const loadState = useCallback(async () => {
     if (!initialLoadComplete.current) {
@@ -78,11 +87,6 @@ export function App() {
     };
   }, [loadState]);
 
-  const showToast = (type: 'success' | 'error', text: string) => {
-    setToast({ type, text });
-    setTimeout(() => setToast(null), 3000);
-  };
-
   const handleAddToList = async (domain: string, listType: 'allow' | 'deny') => {
     try {
       const response = (await browser.runtime.sendMessage({
@@ -91,12 +95,12 @@ export function App() {
       })) as MessageResponse<void> | undefined;
 
       if (response?.success) {
-        showToast('success', `Added ${domain} to ${listType}list`);
+        showToast({ type: 'success', message: `Added ${domain} to ${listType}list` });
       } else {
-        showToast('error', response?.error || 'Failed to add domain');
+        showToast({ type: 'error', message: response?.error || 'Failed to add domain' });
       }
     } catch (err) {
-      showToast('error', 'Failed to add domain');
+      showToast({ type: 'error', message: 'Failed to add domain' });
     }
   };
 
@@ -161,8 +165,6 @@ export function App() {
           <QueryLog />
         )}
       </div>
-
-      {toast && <div class={`toast ${toast.type}`}>{toast.text}</div>}
     </div>
   );
 }

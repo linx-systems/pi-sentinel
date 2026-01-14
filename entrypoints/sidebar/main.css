@@ -475,6 +475,11 @@ body {
   color: #ef4444;
 }
 
+.toast.warning {
+  background: rgba(251, 191, 36, 0.2);
+  color: #fbbf24;
+}
+
 @keyframes slideUp {
   from {
     transform: translateY(100%);

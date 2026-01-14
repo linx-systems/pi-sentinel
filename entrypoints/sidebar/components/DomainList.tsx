@@ -11,6 +11,7 @@ import {
 } from '~/utils/icons';
 import { isSameSite } from '~/utils/utils';
 import type { MessageResponse } from '~/utils/messaging';
+import { useToast } from './ToastContext';
 
 interface DomainListProps {
   domains: string[];
@@ -34,13 +35,18 @@ export function DomainList({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Map<string, SearchResult>>(new Map());
   const [isSearchingAll, setIsSearchingAll] = useState(false);
+  const { showToast } = useToast();
 
   // Auto-search state (Phase 1)
   const [autoSearchEnabled, setAutoSearchEnabled] = useState(false);
-  const [autoSearchProgress, setAutoSearchProgress] = useState<{ current: number; total: number } | null>(null);
+  const [autoSearchProgress, setAutoSearchProgress] = useState<{ current: number; total: number; retrying?: boolean } | null>(null);
 
-  // Track which domains have been auto-searched to avoid re-searching (Phase 2)
-  const autoSearchedDomains = useRef<Set<string>>(new Set());
+  // Track search state per domain (success/failed/pending)
+  const domainSearchState = useRef<Map<string, 'pending' | 'searching' | 'success' | 'failed'>>(new Map());
+
+  // Track retry attempts per domain (max 2 retries = 3 total attempts)
+  const retryAttempts = useRef<Map<string, number>>(new Map());
+  const MAX_RETRIES = 2;
 
   // Track currently searching domains to prevent duplicate searches
   const currentlySearching = useRef<Set<string>>(new Set());
@@ -75,9 +81,10 @@ export function DomainList({
     });
   }, []);
 
-  // Clear auto-searched domains when page changes (Phase 2)
+  // Clear search state when page changes (Phase 2)
   useEffect(() => {
-    autoSearchedDomains.current.clear();
+    domainSearchState.current.clear();
+    retryAttempts.current.clear();
     currentlySearching.current.clear();
   }, [firstPartyDomain]);
 
@@ -87,14 +94,14 @@ export function DomainList({
     await browser.storage.local.set({ pisentinel_autoSearch: enabled });
   };
 
-  // Auto-search logic with mitigations (Phase 3)
+  // Auto-search logic with retry support (Phase 3)
   useEffect(() => {
     if (!autoSearchEnabled) return;
 
-    // Find domains that haven't been searched and aren't currently being searched
+    // Find domains that haven't succeeded and aren't currently being searched
     const newDomains = domains.filter(
       (d) => !searchResults.has(d) &&
-             !autoSearchedDomains.current.has(d) &&
+             domainSearchState.current.get(d) !== 'success' &&
              !currentlySearching.current.has(d)
     );
 
@@ -105,9 +112,9 @@ export function DomainList({
 
     let cancelled = false;
 
-    const searchDomain = async (domain: string): Promise<boolean> => {
+    const searchDomain = async (domain: string): Promise<{ success: boolean; shouldRetry: boolean }> => {
       try {
-        if (cancelled) return false;
+        if (cancelled) return { success: false, shouldRetry: false };
 
         const response = (await browser.runtime.sendMessage({
           type: 'SEARCH_DOMAIN',
@@ -116,21 +123,28 @@ export function DomainList({
 
         if (!cancelled && response?.success && response.data) {
           setSearchResult(domain, response.data);
+          domainSearchState.current.set(domain, 'success');
           // Reset circuit breaker on success
           circuitBreaker.current.failures = 0;
-          return true; // Success
+          return { success: true, shouldRetry: false };
         }
 
-        // Track failure
+        // Track failure - should retry transient errors
         circuitBreaker.current.failures++;
         circuitBreaker.current.lastFailure = Date.now();
-        return false; // Failed or no data
+        domainSearchState.current.set(domain, 'failed');
+
+        // Retry transient errors (no data, API errors) but not permanent errors
+        return { success: false, shouldRetry: true };
       } catch (err) {
         console.error(`Auto-search failed for ${domain}:`, err);
         // Track failure
         circuitBreaker.current.failures++;
         circuitBreaker.current.lastFailure = Date.now();
-        return false; // Error
+        domainSearchState.current.set(domain, 'failed');
+
+        // Retry on network/API errors
+        return { success: false, shouldRetry: true };
       }
     };
 
@@ -138,19 +152,30 @@ export function DomainList({
       const CONCURRENT_LIMIT = 2; // Reduced from 5 to 2 for Raspberry Pi
       const BASE_DELAY = 500; // Increased from 300ms to 500ms
       const MAX_FAILURES = 3; // Stop if 3 consecutive failures
+      const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff for retries
+
       const queue = [...newDomains];
       let searchedCount = 0;
       let consecutiveFailures = 0;
+      const failedDomains: Array<{ domain: string; shouldRetry: boolean }> = [];
 
       setAutoSearchProgress({ current: 0, total: newDomains.length });
 
-      // Process in batches
+      // Phase 1: Initial search
       while (queue.length > 0 && !cancelled) {
         // Circuit breaker: Stop if too many failures
         if (circuitBreaker.current.failures >= MAX_FAILURES) {
           const timeSinceLastFailure = Date.now() - circuitBreaker.current.lastFailure;
           if (timeSinceLastFailure < 30000) { // 30 second cooldown
-            console.warn('[DomainList] Circuit breaker triggered - too many API failures. Stopping auto-search.');
+            console.warn('[DomainList] Circuit breaker triggered - too many API failures.');
+
+            // Show toast notification
+            showToast({
+              type: 'warning',
+              message: 'Auto-search stopped due to repeated Pi-hole errors. Check your connection.',
+              duration: 8000
+            });
+
             setAutoSearchProgress(null);
             // Clear currently searching for remaining domains
             queue.forEach(d => currentlySearching.current.delete(d));
@@ -163,12 +188,12 @@ export function DomainList({
 
         const batch = queue.splice(0, CONCURRENT_LIMIT);
 
-        // Execute batch concurrently and track which succeeded
+        // Execute batch concurrently
         const results = await Promise.all(
-          batch.map(async (domain) => ({
-            domain,
-            success: await searchDomain(domain),
-          }))
+          batch.map(async (domain) => {
+            const result = await searchDomain(domain);
+            return { domain, ...result };
+          })
         );
 
         // Count failures in this batch
@@ -179,11 +204,15 @@ export function DomainList({
           consecutiveFailures = 0;
         }
 
-        // Mark domains as searched and remove from currently searching
-        for (const { domain, success } of results) {
-          currentlySearching.current.delete(domain);
-          if (success) {
-            autoSearchedDomains.current.add(domain);
+        // Track failed domains for retry
+        for (const result of results) {
+          currentlySearching.current.delete(result.domain);
+
+          if (!result.success && result.shouldRetry) {
+            const attempts = retryAttempts.current.get(result.domain) || 0;
+            if (attempts < MAX_RETRIES) {
+              failedDomains.push({ domain: result.domain, shouldRetry: true });
+            }
           }
         }
 
@@ -196,6 +225,37 @@ export function DomainList({
         if (!cancelled && queue.length > 0) {
           const delay = BASE_DELAY * Math.pow(2, Math.min(consecutiveFailures, 3));
           await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+
+      // Phase 2: Retry failed domains
+      if (failedDomains.length > 0 && !cancelled) {
+        console.log(`[DomainList] Retrying ${failedDomains.length} failed domains`);
+
+        for (const { domain } of failedDomains) {
+          if (cancelled) break;
+
+          const currentAttempt = (retryAttempts.current.get(domain) || 0) + 1;
+          retryAttempts.current.set(domain, currentAttempt);
+
+          // Wait with exponential backoff before retry
+          const retryDelay = RETRY_DELAYS[Math.min(currentAttempt - 1, RETRY_DELAYS.length - 1)];
+          await new Promise((r) => setTimeout(r, retryDelay));
+
+          setAutoSearchProgress({
+            current: currentAttempt,
+            total: failedDomains.length,
+            retrying: true
+          });
+
+          currentlySearching.current.add(domain);
+          const result = await searchDomain(domain);
+          currentlySearching.current.delete(domain);
+
+          // If still failing and haven't hit max retries, add back to queue
+          if (!result.success && result.shouldRetry && currentAttempt < MAX_RETRIES) {
+            failedDomains.push({ domain, shouldRetry: true });
+          }
         }
       }
 
@@ -320,6 +380,7 @@ export function DomainList({
         </label>
         {autoSearchProgress && (
           <span class="auto-search-status">
+            {autoSearchProgress.retrying ? 'Retrying... ' : ''}
             {autoSearchProgress.current}/{autoSearchProgress.total}
           </span>
         )}
