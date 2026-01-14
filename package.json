@@ -4,23 +4,29 @@
   "description": "Firefox MV3 extension for Pi-hole v6 integration",
   "type": "module",
   "scripts": {
-    "build": "bun scripts/build.js",
-    "dev": "bun scripts/build.js --watch",
-    "lint": "eslint src --ext .ts,.tsx",
-    "lint:ext": "web-ext lint",
-    "package": "bun run build && cd dist && zip -r ../pisentinel.xpi .",
-    "sign": "bun run build && web-ext sign --source-dir=dist --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET",
-    "sign:channel": "bun run build && web-ext sign --source-dir=dist --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET --channel=unlisted"
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "zip": "wxt zip",
+    "lint": "eslint entrypoints utils background --ext .ts,.tsx",
+    "lint:ext": "web-ext lint --source-dir=dist/firefox-mv3",
+    "package": "bun run build && cd dist/firefox-mv3 && zip -r ../../pisentinel.xpi .",
+    "sign": "bun run build && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET",
+    "sign:channel": "bun run build && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET --channel=unlisted",
+    "postinstall": "wxt prepare"
   },
   "devDependencies": {
+    "@preact/preset-vite": "^2.10.2",
     "@resvg/resvg-js": "^2.6.2",
     "@types/webextension-polyfill": "^0.12.1",
-    "esbuild": "^0.24.2",
     "eslint": "^9.17.0",
     "sharp": "^0.34.5",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.2",
-    "web-ext": "^9.2.0"
+    "vite": "^6.4.1",
+    "web-ext": "^9.2.0",
+    "wxt": "^0.19.29"
   },
   "dependencies": {
     "preact": "^10.25.4",

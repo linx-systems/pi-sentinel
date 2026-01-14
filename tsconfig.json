@@ -16,9 +16,15 @@
     "jsxImportSource": "preact",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
-    }
+      "~/*": ["./*"]
+    },
+    "types": ["vite/client"]
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "entrypoints/**/*",
+    "utils/**/*",
+    "background/**/*",
+    "wxt.config.ts"
+  ],
+  "exclude": ["node_modules", "dist", ".wxt", ".output"]
 }

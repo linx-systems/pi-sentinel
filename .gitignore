@@ -8,4 +8,5 @@ web-ext-artifacts/
 .claude/
 .tldr
 .tldrignore
-thoughts
+thoughts.wxt/
+.output/
