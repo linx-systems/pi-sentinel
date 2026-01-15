@@ -2,6 +2,7 @@
 export {}
 declare global {
   const ALARMS: typeof import('/home/rooki/autoclaudeprojects/pisentinel/utils/constants')['ALARMS']
+  const ArrowUpIcon: typeof import('/home/rooki/autoclaudeprojects/pisentinel/utils/icons')['ArrowUpIcon']
   const BlockIcon: typeof import('/home/rooki/autoclaudeprojects/pisentinel/utils/icons')['BlockIcon']
   const CheckIcon: typeof import('/home/rooki/autoclaudeprojects/pisentinel/utils/icons')['CheckIcon']
   const ClearIcon: typeof import('/home/rooki/autoclaudeprojects/pisentinel/utils/icons')['ClearIcon']

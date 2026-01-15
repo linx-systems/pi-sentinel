@@ -510,11 +510,15 @@ function DomainItem({ domain, isFirstParty, onAddToList, searchResult, onSearchR
       </div>
       {searchResult && (
         <div class="search-result">
-          <span class={searchResult.gravity ? 'status-blocked' : 'status-allowed'}>
-            {searchResult.gravity ? '● Blocked (gravity)' : '○ Not in blocklist'}
-          </span>
-          {searchResult.allowlist && <span class="status-allowlist">● Allowlisted</span>}
-          {searchResult.denylist && <span class="status-denylist">● Denylisted</span>}
+          {searchResult.denylist ? (
+            <span class="status-denylist">● Denylisted</span>
+          ) : searchResult.allowlist ? (
+            <span class="status-allowlist">● Allowlisted</span>
+          ) : searchResult.gravity ? (
+            <span class="status-blocked">● Blocked (gravity)</span>
+          ) : (
+            <span class="status-allowed">○ Not in blocklist</span>
+          )}
           <button class="dismiss-btn" onClick={() => onSearchResult(null)} title="Dismiss">×</button>
         </div>
       )}

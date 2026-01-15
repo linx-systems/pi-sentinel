@@ -1,6 +1,7 @@
 const globals = {
   "ALARMS": true,
   "ApiError": true,
+  "ArrowUpIcon": true,
   "AuthResponse": true,
   "AuthenticatePayload": true,
   "AuthenticateResponse": true,
