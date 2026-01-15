@@ -1,170 +1,170 @@
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import {useCallback, useEffect, useRef, useState} from 'preact/hooks';
 import browser from 'webextension-polyfill';
-import { DomainList } from './DomainList';
-import { QueryLog } from './QueryLog';
-import { ToastProvider, useToast } from './ToastContext';
-import type { ExtensionState } from '~/utils/types';
-import type { MessageResponse, SerializableTabDomains } from '~/utils/messaging';
+import {DomainList} from './DomainList';
+import {QueryLog} from './QueryLog';
+import {ToastProvider, useToast} from './ToastContext';
+import type {ExtensionState} from '~/utils/types';
+import type {MessageResponse, SerializableTabDomains} from '~/utils/messaging';
 
 type Tab = 'domains' | 'queries';
 type TabDomains = SerializableTabDomains;
 
 export function App() {
-  return (
-    <ToastProvider>
-      <AppContent />
-    </ToastProvider>
-  );
+    return (
+        <ToastProvider>
+            <AppContent/>
+        </ToastProvider>
+    );
 }
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<Tab>('domains');
-  const [isConnected, setIsConnected] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [tabDomains, setTabDomains] = useState<TabDomains | null>(null);
-  const initialLoadComplete = useRef(false);
-  const { showToast } = useToast();
+    const [activeTab, setActiveTab] = useState<Tab>('domains');
+    const [isConnected, setIsConnected] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
+    const [tabDomains, setTabDomains] = useState<TabDomains | null>(null);
+    const initialLoadComplete = useRef(false);
+    const {showToast} = useToast();
 
-  const loadState = useCallback(async () => {
-    if (!initialLoadComplete.current) {
-      setIsLoading(true);
-    }
-    try {
-      // Get connection state
-      const stateResponse = (await browser.runtime.sendMessage({
-        type: 'GET_STATE',
-      })) as MessageResponse<ExtensionState> | undefined;
-
-      if (stateResponse?.success && stateResponse.data) {
-        setIsConnected(stateResponse.data.isConnected);
-      }
-
-      // Get current tab
-      const [currentTab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (currentTab?.id) {
-        const domainsResponse = (await browser.runtime.sendMessage({
-          type: 'GET_TAB_DOMAINS',
-          payload: { tabId: currentTab.id },
-        })) as MessageResponse<TabDomains> | undefined;
-
-        if (domainsResponse?.success && domainsResponse.data) {
-          setTabDomains(domainsResponse.data);
+    const loadState = useCallback(async () => {
+        if (!initialLoadComplete.current) {
+            setIsLoading(true);
         }
-      }
-    } catch (err) {
-      console.error('Failed to load state:', err);
-    } finally {
-      setIsLoading(false);
-      initialLoadComplete.current = true;
-    }
-  }, []);
+        try {
+            // Get connection state
+            const stateResponse = (await browser.runtime.sendMessage({
+                type: 'GET_STATE',
+            })) as MessageResponse<ExtensionState> | undefined;
 
-  useEffect(() => {
-    loadState();
+            if (stateResponse?.success && stateResponse.data) {
+                setIsConnected(stateResponse.data.isConnected);
+            }
 
-    // Listen for tab changes
-    const handleTabActivated = () => loadState();
-    browser.tabs.onActivated.addListener(handleTabActivated);
+            // Get current tab
+            const [currentTab] = await browser.tabs.query({active: true, currentWindow: true});
+            if (currentTab?.id) {
+                const domainsResponse = (await browser.runtime.sendMessage({
+                    type: 'GET_TAB_DOMAINS',
+                    payload: {tabId: currentTab.id},
+                })) as MessageResponse<TabDomains> | undefined;
 
-    // Listen for state and domain updates
-    const handleMessage = async (message: unknown) => {
-      const msg = message as { type: string; payload?: TabDomains };
-      if (msg.type === 'STATE_UPDATED') {
+                if (domainsResponse?.success && domainsResponse.data) {
+                    setTabDomains(domainsResponse.data);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to load state:', err);
+        } finally {
+            setIsLoading(false);
+            initialLoadComplete.current = true;
+        }
+    }, []);
+
+    useEffect(() => {
         loadState();
-      } else if (msg.type === 'TAB_DOMAINS_UPDATED' && msg.payload) {
-        // Real-time domain update - check if it's for the current tab
-        const [currentTab] = await browser.tabs.query({ active: true, currentWindow: true });
-        if (currentTab?.id === msg.payload.tabId) {
-          setTabDomains(msg.payload);
+
+        // Listen for tab changes
+        const handleTabActivated = () => loadState();
+        browser.tabs.onActivated.addListener(handleTabActivated);
+
+        // Listen for state and domain updates
+        const handleMessage = async (message: unknown) => {
+            const msg = message as { type: string; payload?: TabDomains };
+            if (msg.type === 'STATE_UPDATED') {
+                loadState();
+            } else if (msg.type === 'TAB_DOMAINS_UPDATED' && msg.payload) {
+                // Real-time domain update - check if it's for the current tab
+                const [currentTab] = await browser.tabs.query({active: true, currentWindow: true});
+                if (currentTab?.id === msg.payload.tabId) {
+                    setTabDomains(msg.payload);
+                }
+            }
+        };
+        browser.runtime.onMessage.addListener(handleMessage);
+
+        return () => {
+            browser.tabs.onActivated.removeListener(handleTabActivated);
+            browser.runtime.onMessage.removeListener(handleMessage);
+        };
+    }, [loadState]);
+
+    const handleAddToList = async (domain: string, listType: 'allow' | 'deny') => {
+        try {
+            const response = (await browser.runtime.sendMessage({
+                type: listType === 'allow' ? 'ADD_TO_ALLOWLIST' : 'ADD_TO_DENYLIST',
+                payload: {domain},
+            })) as MessageResponse<void> | undefined;
+
+            if (response?.success) {
+                showToast({type: 'success', message: `Added ${domain} to ${listType}list`});
+            } else {
+                showToast({type: 'error', message: response?.error || 'Failed to add domain'});
+            }
+        } catch (err) {
+            showToast({type: 'error', message: 'Failed to add domain'});
         }
-      }
     };
-    browser.runtime.onMessage.addListener(handleMessage);
 
-    return () => {
-      browser.tabs.onActivated.removeListener(handleTabActivated);
-      browser.runtime.onMessage.removeListener(handleMessage);
+    const openOptions = () => {
+        browser.runtime.openOptionsPage();
     };
-  }, [loadState]);
 
-  const handleAddToList = async (domain: string, listType: 'allow' | 'deny') => {
-    try {
-      const response = (await browser.runtime.sendMessage({
-        type: listType === 'allow' ? 'ADD_TO_ALLOWLIST' : 'ADD_TO_DENYLIST',
-        payload: { domain },
-      })) as MessageResponse<void> | undefined;
-
-      if (response?.success) {
-        showToast({ type: 'success', message: `Added ${domain} to ${listType}list` });
-      } else {
-        showToast({ type: 'error', message: response?.error || 'Failed to add domain' });
-      }
-    } catch (err) {
-      showToast({ type: 'error', message: 'Failed to add domain' });
+    if (isLoading) {
+        return (
+            <div class="loading">
+                <div class="spinner"/>
+                <span>Loading...</span>
+            </div>
+        );
     }
-  };
 
-  const openOptions = () => {
-    browser.runtime.openOptionsPage();
-  };
+    if (!isConnected) {
+        return (
+            <div class="not-connected">
+                <h2>Not Connected</h2>
+                <p>Configure your Pi-hole connection to view domains.</p>
+                <button onClick={openOptions}>Configure Pi-hole</button>
+            </div>
+        );
+    }
 
-  if (isLoading) {
     return (
-      <div class="loading">
-        <div class="spinner" />
-        <span>Loading...</span>
-      </div>
+        <div style={{height: '100%', display: 'flex', flexDirection: 'column'}}>
+            <header class="header">
+                <h1>PiSentinel Domains</h1>
+                {tabDomains && (
+                    <div class="current-site" title={tabDomains.pageUrl}>
+                        {tabDomains.firstPartyDomain}
+                    </div>
+                )}
+            </header>
+
+            <div class="tabs">
+                <button
+                    class={`tab ${activeTab === 'domains' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('domains')}
+                >
+                    Domains ({tabDomains?.domains.length || 0})
+                </button>
+                <button
+                    class={`tab ${activeTab === 'queries' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('queries')}
+                >
+                    Query Log
+                </button>
+            </div>
+
+            <div class="content">
+                {activeTab === 'domains' ? (
+                    <DomainList
+                        domains={tabDomains?.domains || []}
+                        thirdPartyDomains={tabDomains?.thirdPartyDomains || []}
+                        firstPartyDomain={tabDomains?.firstPartyDomain || ''}
+                        onAddToList={handleAddToList}
+                    />
+                ) : (
+                    <QueryLog onAddToList={handleAddToList}/>
+                )}
+            </div>
+        </div>
     );
-  }
-
-  if (!isConnected) {
-    return (
-      <div class="not-connected">
-        <h2>Not Connected</h2>
-        <p>Configure your Pi-hole connection to view domains.</p>
-        <button onClick={openOptions}>Configure Pi-hole</button>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <header class="header">
-        <h1>PiSentinel Domains</h1>
-        {tabDomains && (
-          <div class="current-site" title={tabDomains.pageUrl}>
-            {tabDomains.firstPartyDomain}
-          </div>
-        )}
-      </header>
-
-      <div class="tabs">
-        <button
-          class={`tab ${activeTab === 'domains' ? 'active' : ''}`}
-          onClick={() => setActiveTab('domains')}
-        >
-          Domains ({tabDomains?.domains.length || 0})
-        </button>
-        <button
-          class={`tab ${activeTab === 'queries' ? 'active' : ''}`}
-          onClick={() => setActiveTab('queries')}
-        >
-          Query Log
-        </button>
-      </div>
-
-      <div class="content">
-        {activeTab === 'domains' ? (
-          <DomainList
-            domains={tabDomains?.domains || []}
-            thirdPartyDomains={tabDomains?.thirdPartyDomains || []}
-            firstPartyDomain={tabDomains?.firstPartyDomain || ''}
-            onAddToList={handleAddToList}
-          />
-        ) : (
-          <QueryLog onAddToList={handleAddToList} />
-        )}
-      </div>
-    </div>
-  );
 }

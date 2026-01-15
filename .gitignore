@@ -11,3 +11,15 @@ web-ext-artifacts/
 thoughts
 .wxt/
 .output/
+
+# Test coverage
+coverage/
+.vitest/
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+.env*
+!.env.example

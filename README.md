@@ -1,6 +1,7 @@
 # PiSentinel
 
-A Firefox Manifest V3 extension for Pi-hole v6 integration. Monitor DNS blocking statistics, control blocking status, and manage domains directly from your browser.
+A Firefox Manifest V3 extension for Pi-hole v6 integration. Monitor DNS blocking statistics, control blocking status,
+and manage domains directly from your browser.
 
 ## Features
 
@@ -26,6 +27,7 @@ Before installing, ensure you have:
 - **Bun** 0.7.x or later (optional, for faster build times)
 
 Verify your installation:
+
 ```bash
 node --version  # Should output v18.x.x or higher
 npm --version   # Should output 9.x.x or higher
@@ -57,10 +59,10 @@ bun --version   # Should output 0.7.x or higher (if installed)
    ```
 
 4. **Load in Firefox**
-   - Open Firefox and navigate to `about:debugging`
-   - Click "This Firefox" in the sidebar
-   - Click "Load Temporary Add-on..."
-   - Select the `dist/manifest.json` file
+    - Open Firefox and navigate to `about:debugging`
+    - Click "This Firefox" in the sidebar
+    - Click "Load Temporary Add-on..."
+    - Select the `dist/manifest.json` file
 
 ## Development
 
@@ -85,26 +87,29 @@ npm run dev
    This watches for file changes and automatically rebuilds. Output is unminified with inline sourcemaps for debugging.
 
 2. **Load the extension in Firefox**
-   - Navigate to `about:debugging#/runtime/this-firefox`
-   - Click "Load Temporary Add-on..."
-   - Select `dist/manifest.json`
+    - Navigate to `about:debugging#/runtime/this-firefox`
+    - Click "Load Temporary Add-on..."
+    - Select `dist/manifest.json`
 
 3. **Reload after changes**
-   - After esbuild rebuilds (watch the terminal for "Build complete"), click the "Reload" button next to PiSentinel in `about:debugging`
-   - For popup/sidebar changes, close and reopen the popup/sidebar
-   - For background script changes, always reload the extension
+    - After esbuild rebuilds (watch the terminal for "Build complete"), click the "Reload" button next to PiSentinel in
+      `about:debugging`
+    - For popup/sidebar changes, close and reopen the popup/sidebar
+    - For background script changes, always reload the extension
 
 ### Debugging
 
 #### Background Script
+
 1. Go to `about:debugging#/runtime/this-firefox`
 2. Find PiSentinel and click "Inspect"
 3. This opens DevTools for the background script where you can:
-   - View console logs
-   - Set breakpoints
-   - Inspect network requests to Pi-hole API
+    - View console logs
+    - Set breakpoints
+    - Inspect network requests to Pi-hole API
 
 #### Popup / Sidebar / Options
+
 1. Right-click inside the popup/sidebar/options page
 2. Select "Inspect" to open DevTools for that specific UI
 
@@ -117,6 +122,7 @@ The extension uses `console.log/warn/error` for logging. In development mode, us
 - **Message passing**: Log in `src/background/index.ts` message handlers
 
 To add temporary debug logging:
+
 ```typescript
 // In any source file
 console.log('[PiSentinel]', 'Debug message', { data });
@@ -124,14 +130,14 @@ console.log('[PiSentinel]', 'Debug message', { data });
 
 ### Available Scripts
 
-| Command | Description |
-|---------|-------------|
-| `npm run build` | Production build to `dist/` (minified, no sourcemaps) |
-| `npm run dev` | Watch mode for development (unminified, inline sourcemaps) |
-| `npm run lint` | Run ESLint on TypeScript files |
-| `npm run package` | Build and create unsigned `pisentinel.xpi` for distribution |
-| `npm run sign` | Build and sign extension with Mozilla (requires AMO credentials) |
-| `npm run sign:channel` | Build and sign as unlisted (for self-distribution) |
+| Command                | Description                                                      |
+|------------------------|------------------------------------------------------------------|
+| `npm run build`        | Production build to `dist/` (minified, no sourcemaps)            |
+| `npm run dev`          | Watch mode for development (unminified, inline sourcemaps)       |
+| `npm run lint`         | Run ESLint on TypeScript files                                   |
+| `npm run package`      | Build and create unsigned `pisentinel.xpi` for distribution      |
+| `npm run sign`         | Build and sign extension with Mozilla (requires AMO credentials) |
+| `npm run sign:channel` | Build and sign as unlisted (for self-distribution)               |
 
 ### Signing the Extension
 
@@ -140,9 +146,9 @@ To distribute your extension outside of development, you'll need to sign it with
 #### Setup Signing Credentials
 
 1. **Get API credentials** from [Mozilla Add-ons Developer Hub](https://addons.mozilla.org/developers/addon/api/key/)
-   - Sign in to your Mozilla account
-   - Navigate to API Key Management
-   - Generate new credentials (API Key + Secret)
+    - Sign in to your Mozilla account
+    - Navigate to API Key Management
+    - Generate new credentials (API Key + Secret)
 
 2. **Configure environment variables**
    ```bash
@@ -168,8 +174,10 @@ The signed `.xpi` file will be created in the `web-ext-artifacts/` directory.
 #### Alternative: Load Unsigned Extension (Development Only)
 
 For testing without signing:
+
 - **Firefox Developer/Nightly Edition**: Load temporary add-on via `about:debugging`
-- **Firefox Release**: Must disable signature verification in `about:config` (set `xpinstall.signatures.required` to `false`)
+- **Firefox Release**: Must disable signature verification in `about:config` (set `xpinstall.signatures.required` to
+  `false`)
 
 ### Project Structure
 
@@ -211,7 +219,9 @@ scripts/
 ## Usage
 
 ### Popup
+
 Click the toolbar icon to view:
+
 - Connection status
 - Total queries and blocked count
 - Block rate percentage
@@ -219,15 +229,19 @@ Click the toolbar icon to view:
 - Toggle blocking on/off with optional timer
 
 ### Sidebar
+
 Open the sidebar (View → Sidebar → PiSentinel Domains) to see:
+
 - **Domains tab**: All domains loaded by the current page
-  - First-party domains (green)
-  - Third-party domains (orange)
-  - Quick actions to allow/block each domain
+    - First-party domains (green)
+    - Third-party domains (orange)
+    - Quick actions to allow/block each domain
 - **Query Log tab**: Recent DNS queries with filtering
 
 ### Badge
+
 The toolbar badge shows:
+
 - **Number**: Blocked query count
 - **Green background**: Blocking active
 - **Red background**: Blocking disabled
@@ -242,39 +256,45 @@ The toolbar badge shows:
 
 ## Pi-hole v6 API Endpoints Used
 
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /api/auth` | Authenticate and get session |
-| `DELETE /api/auth` | Logout |
-| `GET /api/stats/summary` | Fetch statistics |
-| `GET/POST /api/dns/blocking` | Check/toggle blocking |
-| `GET /api/queries` | Query log |
-| `POST /api/domains/allow/exact` | Add to allowlist |
-| `POST /api/domains/deny/exact` | Add to denylist |
-| `GET /api/search/{domain}` | Search domain status |
+| Endpoint                        | Purpose                      |
+|---------------------------------|------------------------------|
+| `POST /api/auth`                | Authenticate and get session |
+| `DELETE /api/auth`              | Logout                       |
+| `GET /api/stats/summary`        | Fetch statistics             |
+| `GET/POST /api/dns/blocking`    | Check/toggle blocking        |
+| `GET /api/queries`              | Query log                    |
+| `POST /api/domains/allow/exact` | Add to allowlist             |
+| `POST /api/domains/deny/exact`  | Add to denylist              |
+| `GET /api/search/{domain}`      | Search domain status         |
 
 ## Troubleshooting
 
 ### "Connection failed" error
+
 - Verify Pi-hole URL is correct (no `/admin` suffix needed)
 - Ensure Pi-hole v6 is running
 - Check if Pi-hole is accessible from your browser
 
 ### Session expires frequently
+
 - The extension automatically refreshes sessions every 4 minutes
 - If issues persist, check Pi-hole's session timeout settings
 
 ### Extension not updating after code changes
+
 - Ensure `npm run dev` is running and shows successful rebuilds
 - Click "Reload" in `about:debugging` after each change
 - For popup changes, close and reopen the popup
 
 ### Console errors not visible
+
 - Background script logs: Inspect via `about:debugging`
 - Popup/sidebar logs: Right-click → Inspect within the UI
 
 ### macOS users
-- Recent macOS versions may require granting Firefox "Local Network" permission in System Preferences → Privacy & Security
+
+- Recent macOS versions may require granting Firefox "Local Network" permission in System Preferences → Privacy &
+  Security
 
 ## Contributing
 

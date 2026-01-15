@@ -1,27 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <defs>
-    <linearGradient id="shield16" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3d4a5c"/>
-      <stop offset="100%" stop-color="#1e2530"/>
-    </linearGradient>
-    <radialGradient id="vortex16" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#1a1a2e"/>
-      <stop offset="100%" stop-color="#1f4068"/>
-    </radialGradient>
-  </defs>
+    <defs>
+        <linearGradient id="shield16" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#3d4a5c"/>
+            <stop offset="100%" stop-color="#1e2530"/>
+        </linearGradient>
+        <radialGradient id="vortex16" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#1a1a2e"/>
+            <stop offset="100%" stop-color="#1f4068"/>
+        </radialGradient>
+    </defs>
 
-  <!-- Shield -->
-  <path d="M8 1 L14 2.5 L14 7 C14 10 11 13 8 15 C5 13 2 10 2 7 L2 2.5 L8 1 Z"
-    fill="url(#shield16)" stroke="#6b7a8a" stroke-width="0.8"/>
+    <!-- Shield -->
+    <path d="M8 1 L14 2.5 L14 7 C14 10 11 13 8 15 C5 13 2 10 2 7 L2 2.5 L8 1 Z"
+          fill="url(#shield16)" stroke="#6b7a8a" stroke-width="0.8"/>
 
-  <!-- Vortex circle -->
-  <circle cx="8" cy="6.5" r="3.5" fill="url(#vortex16)"/>
+    <!-- Vortex circle -->
+    <circle cx="8" cy="6.5" r="3.5" fill="url(#vortex16)"/>
 
-  <!-- Ring -->
-  <ellipse cx="8" cy="6.5" rx="2.5" ry="1"
-    fill="none" stroke="#f56565" stroke-width="1.2"
-    transform="rotate(-20 8 6.5)"/>
+    <!-- Ring -->
+    <ellipse cx="8" cy="6.5" rx="2.5" ry="1"
+             fill="none" stroke="#f56565" stroke-width="1.2"
+             transform="rotate(-20 8 6.5)"/>
 
-  <!-- Central void -->
-  <circle cx="8" cy="6.5" r="0.8" fill="#0a0a0a"/>
+    <!-- Central void -->
+    <circle cx="8" cy="6.5" r="0.8" fill="#0a0a0a"/>
 </svg>

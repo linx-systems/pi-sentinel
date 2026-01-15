@@ -1,5 +1,5 @@
 import browser from 'webextension-polyfill';
-import type { ExtensionState } from '~/utils/types';
+import type {ExtensionState} from '~/utils/types';
 
 /**
  * Badge Service
@@ -11,101 +11,101 @@ import type { ExtensionState } from '~/utils/types';
 
 // Badge colors (brighter for better visibility)
 const COLORS = {
-  ENABLED: '#10b981', // Bright green - blocking active
-  DISABLED: '#f43f5e', // Bright red - blocking disabled
-  DISCONNECTED: '#9ca3af', // Light gray - not connected
+    ENABLED: '#10b981', // Bright green - blocking active
+    DISABLED: '#f43f5e', // Bright red - blocking disabled
+    DISCONNECTED: '#9ca3af', // Light gray - not connected
 } as const;
 
 class BadgeService {
-  private lastCount: number | null = null;
-  private lastColor: string | null = null;
+    private lastCount: number | null = null;
+    private lastColor: string | null = null;
 
-  /**
-   * Update badge based on current state.
-   */
-  async update(state: ExtensionState): Promise<void> {
-    if (!state.isConnected) {
-      await this.setDisconnected();
-      return;
+    /**
+     * Update badge based on current state.
+     */
+    async update(state: ExtensionState): Promise<void> {
+        if (!state.isConnected) {
+            await this.setDisconnected();
+            return;
+        }
+
+        // Set badge color based on blocking status
+        const color = state.blockingEnabled ? COLORS.ENABLED : COLORS.DISABLED;
+        await this.setColor(color);
+
+        // Set badge text to blocked count
+        if (state.stats) {
+            const blocked = state.stats.queries.blocked;
+            await this.setCount(blocked);
+        }
     }
 
-    // Set badge color based on blocking status
-    const color = state.blockingEnabled ? COLORS.ENABLED : COLORS.DISABLED;
-    await this.setColor(color);
-
-    // Set badge text to blocked count
-    if (state.stats) {
-      const blocked = state.stats.queries.blocked;
-      await this.setCount(blocked);
+    /**
+     * Set badge to disconnected state.
+     */
+    async setDisconnected(): Promise<void> {
+        await this.setColor(COLORS.DISCONNECTED);
+        await this.setText('');
     }
-  }
 
-  /**
-   * Set badge to disconnected state.
-   */
-  async setDisconnected(): Promise<void> {
-    await this.setColor(COLORS.DISCONNECTED);
-    await this.setText('');
-  }
-
-  /**
-   * Set badge count (formats large numbers).
-   */
-  private async setCount(count: number): Promise<void> {
-    if (this.lastCount === count) return;
-    this.lastCount = count;
-
-    const text = this.formatCount(count);
-    await this.setText(text);
-  }
-
-  /**
-   * Set badge text.
-   */
-  private async setText(text: string): Promise<void> {
-    try {
-      await browser.action.setBadgeText({ text });
-    } catch (error) {
-      console.error('Failed to set badge text:', error);
+    /**
+     * Clear badge completely.
+     */
+    async clear(): Promise<void> {
+        this.lastCount = null;
+        this.lastColor = null;
+        await this.setText('');
     }
-  }
 
-  /**
-   * Set badge background color.
-   */
-  private async setColor(color: string): Promise<void> {
-    if (this.lastColor === color) return;
-    this.lastColor = color;
+    /**
+     * Set badge count (formats large numbers).
+     */
+    private async setCount(count: number): Promise<void> {
+        if (this.lastCount === count) return;
+        this.lastCount = count;
 
-    try {
-      await browser.action.setBadgeBackgroundColor({ color });
-      // Firefox supports badge text color
-      await browser.action.setBadgeTextColor({ color: 'white' });
-    } catch (error) {
-      console.error('Failed to set badge color:', error);
+        const text = this.formatCount(count);
+        await this.setText(text);
     }
-  }
 
-  /**
-   * Format count for badge display.
-   * Badge has limited space, so abbreviate large numbers.
-   */
-  private formatCount(count: number): string {
-    if (count === 0) return '0';
-    if (count < 1000) return count.toString();
-    if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-    if (count < 1000000) return `${Math.floor(count / 1000)}k`;
-    return `${(count / 1000000).toFixed(1)}M`;
-  }
+    /**
+     * Set badge text.
+     */
+    private async setText(text: string): Promise<void> {
+        try {
+            await browser.action.setBadgeText({text});
+        } catch (error) {
+            console.error('Failed to set badge text:', error);
+        }
+    }
 
-  /**
-   * Clear badge completely.
-   */
-  async clear(): Promise<void> {
-    this.lastCount = null;
-    this.lastColor = null;
-    await this.setText('');
-  }
+    /**
+     * Set badge background color.
+     */
+    private async setColor(color: string): Promise<void> {
+        if (this.lastColor === color) return;
+        this.lastColor = color;
+
+        try {
+            await browser.action.setBadgeBackgroundColor({color});
+            // Firefox supports badge text color
+            await browser.action.setBadgeTextColor({color: 'white'});
+        } catch (error) {
+            console.error('Failed to set badge color:', error);
+        }
+    }
+
+    /**
+     * Format count for badge display.
+     * Badge has limited space, so abbreviate large numbers.
+     */
+    private formatCount(count: number): string {
+        if (count === 0) return '0';
+        if (count < 1000) return count.toString();
+        if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+        if (count < 1000000) return `${Math.floor(count / 1000)}k`;
+        return `${(count / 1000000).toFixed(1)}M`;
+    }
 }
 
 // Singleton instance

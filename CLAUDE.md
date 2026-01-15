@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PiSentinel is a Firefox Manifest V3 extension for Pi-hole v6 integration. It monitors DNS blocking statistics, controls blocking status, and manages domains directly from the browser.
+PiSentinel is a Firefox Manifest V3 extension for Pi-hole v6 integration. It monitors DNS blocking statistics, controls
+blocking status, and manages domains directly from the browser.
 
 **Key Technologies:**
+
 - TypeScript (strict mode)
 - Preact (lightweight React alternative)
 - esbuild (bundler)
@@ -45,19 +47,20 @@ npm run sign:channel   # Build and sign as unlisted
 
 1. **Start watch mode**: `npm run dev`
 2. **Load in Firefox**:
-   - Navigate to `about:debugging#/runtime/this-firefox`
-   - Click "Load Temporary Add-on..."
-   - Select `dist/manifest.json`
+    - Navigate to `about:debugging#/runtime/this-firefox`
+    - Click "Load Temporary Add-on..."
+    - Select `dist/manifest.json`
 3. **After changes**: Click "Reload" button in about:debugging
 4. **Debugging**:
-   - Background script: Inspect via about:debugging
-   - Popup/Sidebar/Options: Right-click → Inspect within the UI
+    - Background script: Inspect via about:debugging
+    - Popup/Sidebar/Options: Right-click → Inspect within the UI
 
 ## Architecture
 
 ### Message-Based Communication
 
-The extension uses a centralized message-passing architecture where **all cross-context communication flows through the background script**:
+The extension uses a centralized message-passing architecture where **all cross-context communication flows through the
+background script**:
 
 - **Popup/Sidebar/Options → Background**: Send messages via `sendMessage()` from `src/shared/messaging.ts`
 - **Background → API**: Background script handles all Pi-hole API calls
@@ -65,6 +68,7 @@ The extension uses a centralized message-passing architecture where **all cross-
 - **State Changes**: Background script notifies listeners (badge, notifications)
 
 **Key Message Types** (defined in `src/shared/messaging.ts`):
+
 - `GET_STATE`: Retrieve current extension state
 - `CONNECT`: Authenticate with Pi-hole
 - `DISCONNECT`: Log out from Pi-hole
@@ -76,11 +80,13 @@ The extension uses a centralized message-passing architecture where **all cross-
 ### State Management
 
 **Central State Store** (`src/background/state/store.ts`):
+
 - Single source of truth for extension state
 - Manages connection status, statistics, blocking state, per-tab domain data
 - Notifies listeners on state changes (used by badge service, popup listeners)
 
 **State Flow**:
+
 1. UI sends message to background
 2. Background calls Pi-hole API via `apiClient`
 3. Background updates `store` with new data
@@ -92,16 +98,19 @@ The extension uses a centralized message-passing architecture where **all cross-
 **Entry Point**: `src/background/index.ts`
 
 **Services** (in `src/background/services/`):
+
 - `badge.ts`: Updates toolbar badge (blocked count, color based on status)
 - `notifications.ts`: Shows browser notifications for blocking state changes
 - `domain-tracker.ts`: Tracks domains loaded per tab via webRequest API
 
 **API Layer** (in `src/background/api/`):
+
 - `client.ts`: Pi-hole v6 REST API client with session management
 - `auth.ts`: Authentication manager with credential storage and auto-refresh
 - `types.ts`: TypeScript types for Pi-hole API responses
 
 **Crypto** (`src/background/crypto/encryption.ts`):
+
 - PBKDF2 (100,000 iterations) + AES-256-GCM encryption for stored credentials
 - Session tokens stored in `browser.storage.session` (cleared on browser close)
 
@@ -114,6 +123,7 @@ All UI components are built with **Preact** and share styles/patterns:
 - **Options** (`src/options/`): Server configuration and 2FA setup
 
 **Shared Resources** (`src/shared/`):
+
 - `messaging.ts`: Message helpers for cross-context communication
 - `types.ts`: Shared TypeScript types
 - `constants.ts`: API endpoints, defaults, alarm names
@@ -123,11 +133,13 @@ All UI components are built with **Preact** and share styles/patterns:
 ### Session Management
 
 **Auto-refresh pattern**:
+
 - Sessions auto-refresh every 4 minutes via alarm (`SESSION_KEEPALIVE`)
 - `authManager.authenticate()` handles re-authentication on session expiry
 - API client automatically retries with fresh session on 401/403
 
 **2FA/TOTP Support**:
+
 - If Pi-hole requires TOTP, `totpRequired` flag is set in state
 - UI prompts for TOTP code
 - `authManager.authenticateWithTotp()` completes authentication
@@ -135,12 +147,14 @@ All UI components are built with **Preact** and share styles/patterns:
 ### Domain Tracking
 
 **How it works** (see `src/background/services/domain-tracker.ts`):
+
 1. `webRequest.onBeforeRequest` listener captures all HTTP(S) requests
 2. Domains extracted and categorized as first-party vs third-party
 3. Per-tab data stored in state store's `tabDomains` Map
 4. Sidebar retrieves domain list via `GET_TAB_DOMAINS` message
 
 **First-party vs Third-party**:
+
 - First-party: Same eTLD+1 as current tab URL
 - Third-party: Different eTLD+1 (tracked in `utils.ts:isSameSite()`)
 
@@ -149,6 +163,7 @@ All UI components are built with **Preact** and share styles/patterns:
 **Base URL format**: `http://pi.hole` or `http://192.168.1.100` (no `/admin` suffix)
 
 **Key Endpoints Used**:
+
 - `POST /api/auth` - Authenticate (with optional `totp` in body)
 - `DELETE /api/auth` - Logout
 - `GET /api/stats/summary` - Statistics
@@ -158,6 +173,7 @@ All UI components are built with **Preact** and share styles/patterns:
 - `GET /api/search/{domain}` - Search domain status
 
 **Authentication Flow**:
+
 1. User enters password in options page
 2. Password encrypted with PBKDF2+AES and stored
 3. Background script calls `POST /api/auth` with password
@@ -194,9 +210,9 @@ const response = await sendMessage({
 ### Updating State
 
 ```typescript
-import { store } from './state/store';
+import {store} from './state/store';
 
-store.setState({ isConnected: true, stats: newStats });
+store.setState({isConnected: true, stats: newStats});
 ```
 
 ### Firefox MV3 Specifics
@@ -215,25 +231,31 @@ After making changes:
 3. **For popup changes**: Close and reopen the popup
 4. **For background changes**: Always reload the extension
 5. **Check console**:
-   - Background logs: Inspect via about:debugging
-   - UI logs: Right-click → Inspect in popup/sidebar
+    - Background logs: Inspect via about:debugging
+    - UI logs: Right-click → Inspect in popup/sidebar
 
 ## Common Issues
 
 ### Session Expiry
+
 If seeing 401/403 errors, check:
+
 - Password is correctly stored and decrypted
 - `authManager.getDecryptedPassword()` returns valid password
 - Auto-refresh alarm is running (check `browser.alarms.getAll()`)
 
 ### Domain Tracking Not Working
+
 Check:
+
 - `webRequest` permission in manifest.json
 - `host_permissions: ["<all_urls>"]` in manifest.json
 - `domainTracker.initialize()` called in background script
 
 ### Message Passing Failures
+
 Verify:
+
 - Message type exists in `MessageType` union (src/shared/messaging.ts)
 - Background script has handler for message type
 - Response format matches `MessageResponse` type

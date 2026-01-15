@@ -2,22 +2,24 @@
 import "wxt/browser";
 
 declare module "wxt/browser" {
-  export type PublicPath =
-    | "/"
-    | "/background.js"
-    | "/icons/icon-16.png"
-    | "/icons/icon-16.svg"
-    | "/icons/icon-32.png"
-    | "/icons/icon-32.svg"
-    | "/icons/icon-48.png"
-    | "/icons/icon-48.svg"
-    | "/icons/icon-96.png"
-    | "/options.html"
-    | "/popup.html"
-    | "/sidebar.html"
-  type HtmlPublicPath = Extract<PublicPath, `${string}.html`>
-  export interface WxtRuntime {
-    getURL(path: PublicPath): string;
-    getURL(path: `${HtmlPublicPath}${string}`): string;
-  }
+    export type PublicPath =
+        | "/"
+        | "/background.js"
+        | "/icons/icon-16.png"
+        | "/icons/icon-16.svg"
+        | "/icons/icon-32.png"
+        | "/icons/icon-32.svg"
+        | "/icons/icon-48.png"
+        | "/icons/icon-48.svg"
+        | "/icons/icon-96.png"
+        | "/options.html"
+        | "/popup.html"
+        | "/sidebar.html"
+    type HtmlPublicPath = Extract<PublicPath, `${string}.html`>
+
+    export interface WxtRuntime {
+        getURL(path: PublicPath): string;
+
+        getURL(path: `${HtmlPublicPath}${string}`): string;
+    }
 }
