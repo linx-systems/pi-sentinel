@@ -20,7 +20,6 @@ const REFRESH_INTERVAL = 5000; // 5 seconds
 export function QueryLog({ onAddToList }: QueryLogProps) {
   const [queries, setQueries] = useState<QueryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'blocked' | 'allowed'>('all');
   const [searchResults, setSearchResults] = useState<Map<string, SearchResult>>(new Map());
 
@@ -28,14 +27,13 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const refreshIntervalRef = useRef<number | null>(null);
 
-  // Phase 2: Scroll tracking state
-  const [userHasScrolled, setUserHasScrolled] = useState(false);
+  // Phase 2: Scroll tracking state - SIMPLIFIED
+  const [isScrolledDown, setIsScrolledDown] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isProgrammaticScroll = useRef(false);
-  const lastScrollTop = useRef(0);
-
-  // Phase 4: New query count for badge
   const [newQueryCount, setNewQueryCount] = useState(0);
+
+  // Track if initial load has happened (not relying on queries.length due to closure issues)
+  const hasLoadedOnce = useRef(false);
 
   // Phase 4: Load auto-refresh preference on mount
   useEffect(() => {
@@ -90,64 +88,37 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     };
   }, [autoRefreshEnabled]);
 
-  // Phase 2: Scroll detection handler
-  const handleScroll = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (!container || isProgrammaticScroll.current) {
-      isProgrammaticScroll.current = false;
-      return;
+  // SIMPLIFIED: Handle scroll with onScroll event
+  const handleScroll = (e: Event) => {
+    const container = e.target as HTMLDivElement;
+    const scrolledDown = container.scrollTop > 50; // More than 50px from top
+
+    if (!scrolledDown && isScrolledDown) {
+      // User scrolled back to top - reset count
+      setNewQueryCount(0);
     }
 
-    const { scrollTop } = container;
-    const isAtTop = scrollTop <= 10; // 10px threshold
+    setIsScrolledDown(scrolledDown);
+  };
 
-    if (isAtTop) {
-      setUserHasScrolled(false);
-      setNewQueryCount(0); // Reset count when at top
-    } else if (scrollTop !== lastScrollTop.current) {
-      setUserHasScrolled(true);
-    }
-
-    lastScrollTop.current = scrollTop;
-  }, []);
-
-  // Phase 2: Attach scroll listener
+  // Reset scroll state when filter changes
   useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [handleScroll]);
-
-  // Phase 4: Reset scroll state when filter changes
-  useEffect(() => {
-    setUserHasScrolled(false);
+    setIsScrolledDown(false);
     setNewQueryCount(0);
-    const container = scrollContainerRef.current;
-    if (container) {
-      container.scrollTop = 0;
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
     }
   }, [filter]);
 
-  // Phase 3: Back-to-top handler
-  const scrollToTop = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    isProgrammaticScroll.current = true;
-    container.scrollTo({
+  // Back-to-top handler
+  const scrollToTop = () => {
+    scrollContainerRef.current?.scrollTo({
       top: 0,
       behavior: 'smooth'
     });
-
-    // Reset scroll state after animation completes
-    setTimeout(() => {
-      setUserHasScrolled(false);
-      setNewQueryCount(0);
-      isProgrammaticScroll.current = false;
-    }, 300);
-  }, []);
+    setNewQueryCount(0);
+    setIsScrolledDown(false);
+  };
 
   const setSearchResult = (domain: string, result: SearchResult | null) => {
     setSearchResults((prev) => {
@@ -161,13 +132,14 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     });
   };
 
-  // Phase 2: Modified loadQueries with scroll position preservation
+  // SIMPLIFIED: Load queries
   const loadQueries = async () => {
-    // Don't show loading spinner on refresh, only on initial load
-    if (queries.length === 0) {
+    const isInitialLoad = !hasLoadedOnce.current;
+
+    // Show loading only on initial load
+    if (isInitialLoad) {
       setIsLoading(true);
     }
-    setIsRefreshing(true);
 
     try {
       const response = (await browser.runtime.sendMessage({
@@ -178,49 +150,33 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
       if (response?.success && response.data) {
         const queryData = Array.isArray(response.data) ? response.data : [];
 
-        // Phase 2: If user has scrolled, preserve scroll position
-        if (userHasScrolled && queries.length > 0) {
-          // Find new queries by comparing IDs
-          const existingIds = new Set(queries.map(q => q.id));
-          const newQueries = queryData.filter(q => !existingIds.has(q.id));
-
-          if (newQueries.length > 0) {
-            // Phase 4: Update new query count
-            setNewQueryCount(prev => prev + newQueries.length);
-
-            // Calculate scroll adjustment needed
-            const container = scrollContainerRef.current;
-            if (container) {
-              const scrollBefore = container.scrollTop;
-              const heightBefore = container.scrollHeight;
-
-              setQueries(queryData);
-
-              // After DOM update, adjust scroll to maintain position
-              requestAnimationFrame(() => {
-                const heightAfter = container.scrollHeight;
-                const heightDiff = heightAfter - heightBefore;
-                if (heightDiff > 0) {
-                  container.scrollTop = scrollBefore + heightDiff;
-                }
-              });
-            } else {
-              setQueries(queryData);
-            }
-          } else {
-            // No new queries, just update in case of changes
-            setQueries(queryData);
-          }
-        } else {
-          // User at top or initial load - update normally
+        if (isInitialLoad) {
+          // First load - replace with full list
           setQueries(queryData);
+          hasLoadedOnce.current = true;
+        } else {
+          // After initial load - ALWAYS prepend new queries only
+          setQueries(prev => {
+            const existingIds = new Set(prev.map(q => q.id));
+            const newQueries = queryData.filter(q => !existingIds.has(q.id));
+
+            if (newQueries.length > 0) {
+              if (isScrolledDown) {
+                setNewQueryCount(prevCount => prevCount + newQueries.length);
+              }
+              return [...newQueries, ...prev];
+            } else {
+              return prev;
+            }
+          });
         }
       }
     } catch (err) {
       console.error('Failed to load queries:', err);
     } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
+      if (isInitialLoad) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -260,11 +216,6 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
           onClick={() => setFilter('allowed')}
         />
 
-        {/* Phase 4: Refresh indicator */}
-        {isRefreshing && autoRefreshEnabled && (
-          <span class="refresh-indicator">Updating...</span>
-        )}
-
         {/* Phase 1: Auto-refresh toggle */}
         <label class="auto-refresh-toggle" style={{ marginLeft: 'auto' }}>
           <input
@@ -296,6 +247,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
       ) : (
         <div
           ref={scrollContainerRef}
+          onScroll={handleScroll}
           style={{ padding: '0 8px 8px', overflow: 'auto', flex: 1 }}
         >
           {filteredQueries.map((query, index) =>
@@ -313,7 +265,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
       )}
 
       {/* Phase 3: Back-to-top button */}
-      {userHasScrolled && autoRefreshEnabled && (
+      {isScrolledDown && autoRefreshEnabled && (
         <button
           class="back-to-top-btn"
           onClick={scrollToTop}
