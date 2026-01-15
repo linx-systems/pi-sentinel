@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import browser from 'webextension-polyfill';
-import { ErrorIcon, CheckIcon, RefreshIcon, BlockIcon, SearchIcon } from '~/utils/icons';
+import { ErrorIcon, CheckIcon, RefreshIcon, BlockIcon, SearchIcon, ArrowUpIcon } from '~/utils/icons';
 import { isQueryBlocked } from '~/utils/utils';
 import type { QueryEntry } from '~/utils/types';
 import type { MessageResponse } from '~/utils/messaging';
@@ -15,14 +15,138 @@ interface QueryLogProps {
   onAddToList: (domain: string, listType: 'allow' | 'deny') => Promise<void>;
 }
 
+const REFRESH_INTERVAL = 5000; // 5 seconds
+
 export function QueryLog({ onAddToList }: QueryLogProps) {
   const [queries, setQueries] = useState<QueryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'blocked' | 'allowed'>('all');
   const [searchResults, setSearchResults] = useState<Map<string, SearchResult>>(new Map());
 
+  // Phase 1: Auto-refresh state
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const refreshIntervalRef = useRef<number | null>(null);
+
+  // Phase 2: Scroll tracking state
+  const [userHasScrolled, setUserHasScrolled] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isProgrammaticScroll = useRef(false);
+  const lastScrollTop = useRef(0);
+
+  // Phase 4: New query count for badge
+  const [newQueryCount, setNewQueryCount] = useState(0);
+
+  // Phase 4: Load auto-refresh preference on mount
+  useEffect(() => {
+    browser.storage.local.get('pisentinel_queryAutoRefresh').then((result) => {
+      if (result.pisentinel_queryAutoRefresh !== undefined) {
+        setAutoRefreshEnabled(result.pisentinel_queryAutoRefresh);
+      }
+    });
+  }, []);
+
+  // Phase 4: Handle disconnection - stop auto-refresh
+  useEffect(() => {
+    const handleMessage = (msg: any) => {
+      if (msg.type === 'STATE_UPDATED' && !msg.payload?.isConnected) {
+        setAutoRefreshEnabled(false);
+      }
+    };
+
+    browser.runtime.onMessage.addListener(handleMessage);
+    return () => browser.runtime.onMessage.removeListener(handleMessage);
+  }, []);
+
+  // Phase 4: Save preference on change
+  const toggleAutoRefresh = async (enabled: boolean) => {
+    setAutoRefreshEnabled(enabled);
+    await browser.storage.local.set({ pisentinel_queryAutoRefresh: enabled });
+  };
+
+  // Initial load
   useEffect(() => {
     loadQueries();
+  }, []);
+
+  // Phase 1: Auto-refresh interval
+  useEffect(() => {
+    if (!autoRefreshEnabled) {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+        refreshIntervalRef.current = null;
+      }
+      return;
+    }
+
+    refreshIntervalRef.current = window.setInterval(() => {
+      loadQueries();
+    }, REFRESH_INTERVAL);
+
+    return () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+    };
+  }, [autoRefreshEnabled]);
+
+  // Phase 2: Scroll detection handler
+  const handleScroll = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container || isProgrammaticScroll.current) {
+      isProgrammaticScroll.current = false;
+      return;
+    }
+
+    const { scrollTop } = container;
+    const isAtTop = scrollTop <= 10; // 10px threshold
+
+    if (isAtTop) {
+      setUserHasScrolled(false);
+      setNewQueryCount(0); // Reset count when at top
+    } else if (scrollTop !== lastScrollTop.current) {
+      setUserHasScrolled(true);
+    }
+
+    lastScrollTop.current = scrollTop;
+  }, []);
+
+  // Phase 2: Attach scroll listener
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [handleScroll]);
+
+  // Phase 4: Reset scroll state when filter changes
+  useEffect(() => {
+    setUserHasScrolled(false);
+    setNewQueryCount(0);
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTop = 0;
+    }
+  }, [filter]);
+
+  // Phase 3: Back-to-top handler
+  const scrollToTop = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    isProgrammaticScroll.current = true;
+    container.scrollTo({
+      top: 0,
+      behavior: 'smooth'
+    });
+
+    // Reset scroll state after animation completes
+    setTimeout(() => {
+      setUserHasScrolled(false);
+      setNewQueryCount(0);
+      isProgrammaticScroll.current = false;
+    }, 300);
   }, []);
 
   const setSearchResult = (domain: string, result: SearchResult | null) => {
@@ -37,8 +161,14 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     });
   };
 
+  // Phase 2: Modified loadQueries with scroll position preservation
   const loadQueries = async () => {
-    setIsLoading(true);
+    // Don't show loading spinner on refresh, only on initial load
+    if (queries.length === 0) {
+      setIsLoading(true);
+    }
+    setIsRefreshing(true);
+
     try {
       const response = (await browser.runtime.sendMessage({
         type: 'GET_QUERIES',
@@ -46,14 +176,51 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
       })) as MessageResponse<QueryEntry[]> | undefined;
 
       if (response?.success && response.data) {
-        // Ensure we have an array
         const queryData = Array.isArray(response.data) ? response.data : [];
-        setQueries(queryData);
+
+        // Phase 2: If user has scrolled, preserve scroll position
+        if (userHasScrolled && queries.length > 0) {
+          // Find new queries by comparing IDs
+          const existingIds = new Set(queries.map(q => q.id));
+          const newQueries = queryData.filter(q => !existingIds.has(q.id));
+
+          if (newQueries.length > 0) {
+            // Phase 4: Update new query count
+            setNewQueryCount(prev => prev + newQueries.length);
+
+            // Calculate scroll adjustment needed
+            const container = scrollContainerRef.current;
+            if (container) {
+              const scrollBefore = container.scrollTop;
+              const heightBefore = container.scrollHeight;
+
+              setQueries(queryData);
+
+              // After DOM update, adjust scroll to maintain position
+              requestAnimationFrame(() => {
+                const heightAfter = container.scrollHeight;
+                const heightDiff = heightAfter - heightBefore;
+                if (heightDiff > 0) {
+                  container.scrollTop = scrollBefore + heightDiff;
+                }
+              });
+            } else {
+              setQueries(queryData);
+            }
+          } else {
+            // No new queries, just update in case of changes
+            setQueries(queryData);
+          }
+        } else {
+          // User at top or initial load - update normally
+          setQueries(queryData);
+        }
       }
     } catch (err) {
       console.error('Failed to load queries:', err);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -75,8 +242,8 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ padding: '8px', display: 'flex', gap: '8px', flexShrink: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      <div style={{ padding: '8px', display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center' }}>
         <FilterButton
           label="All"
           active={filter === 'all'}
@@ -92,10 +259,25 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
           active={filter === 'allowed'}
           onClick={() => setFilter('allowed')}
         />
+
+        {/* Phase 4: Refresh indicator */}
+        {isRefreshing && autoRefreshEnabled && (
+          <span class="refresh-indicator">Updating...</span>
+        )}
+
+        {/* Phase 1: Auto-refresh toggle */}
+        <label class="auto-refresh-toggle" style={{ marginLeft: 'auto' }}>
+          <input
+            type="checkbox"
+            checked={autoRefreshEnabled}
+            onChange={(e) => toggleAutoRefresh((e.target as HTMLInputElement).checked)}
+          />
+          <span>Auto</span>
+        </label>
+
         <button
-          onClick={loadQueries}
+          onClick={() => loadQueries()}
           style={{
-            marginLeft: 'auto',
             background: 'none',
             border: 'none',
             color: '#888',
@@ -112,7 +294,10 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
           <p>No queries to display.</p>
         </div>
       ) : (
-        <div style={{ padding: '0 8px 8px', overflow: 'auto', flex: 1 }}>
+        <div
+          ref={scrollContainerRef}
+          style={{ padding: '0 8px 8px', overflow: 'auto', flex: 1 }}
+        >
           {filteredQueries.map((query, index) =>
             query ? (
               <QueryItem
@@ -125,6 +310,20 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
             ) : null
           )}
         </div>
+      )}
+
+      {/* Phase 3: Back-to-top button */}
+      {userHasScrolled && autoRefreshEnabled && (
+        <button
+          class="back-to-top-btn"
+          onClick={scrollToTop}
+          title="Back to top and resume auto-scroll"
+        >
+          <ArrowUpIcon size={14} />
+          <span>
+            {newQueryCount > 0 ? `${newQueryCount} new` : 'Back to top'}
+          </span>
+        </button>
       )}
     </div>
   );
@@ -226,20 +425,21 @@ function QueryItem({ query, onAddToList, searchResult, onSearchResult }: QueryIt
 
         {searchResult && (
           <div class="search-result">
-            <span
-              class={searchResult.gravity ? 'status-blocked' : 'status-allowed'}
-              data-bullet={searchResult.gravity ? '●' : '○'}
-            >
-              {searchResult.gravity ? 'Blocked (gravity)' : 'Not in blocklist'}
-            </span>
-            {searchResult.allowlist && (
+            {searchResult.denylist ? (
+              <span class="status-denylist" data-bullet="●">
+                Denylisted
+              </span>
+            ) : searchResult.allowlist ? (
               <span class="status-allowlist" data-bullet="●">
                 Allowlisted
               </span>
-            )}
-            {searchResult.denylist && (
-              <span class="status-denylist" data-bullet="●">
-                Denylisted
+            ) : searchResult.gravity ? (
+              <span class="status-blocked" data-bullet="●">
+                Blocked (gravity)
+              </span>
+            ) : (
+              <span class="status-allowed" data-bullet="○">
+                Not in blocklist
               </span>
             )}
             {(searchResult.allowlist || searchResult.denylist) && (
@@ -252,13 +452,13 @@ function QueryItem({ query, onAddToList, searchResult, onSearchResult }: QueryIt
               </button>
             )}
             <button class="dismiss-btn" onClick={() => onSearchResult(null)} title="Dismiss">
-              ×
+              x
             </button>
           </div>
         )}
 
         <div class="meta">
-          {query.type || '?'} • {clientInfo} • {timeStr}
+          {query.type || '?'} - {clientInfo} - {timeStr}
         </div>
       </div>
     </div>
