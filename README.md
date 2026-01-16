@@ -42,6 +42,8 @@ bun --version   # Should output 0.7.x or higher (if installed)
    ```bash
    git clone https://github.com/nicokosi/pisentinel.git
    cd pisentinel
+   # Optional: Go to release version ( the version soon to be uploaded )
+   git checkout release
    ```
 
 2. **Install dependencies**
@@ -72,30 +74,31 @@ bun --version   # Should output 0.7.x or higher (if installed)
 # Install dependencies
 npm install
 
-# Start development mode with file watching
-npm run dev
-
-# In another terminal, or after changes, reload the extension in Firefox
+npm run build:firefox
 ```
 
-### Development Workflow
+Then:
 
-1. **Start watch mode**
-   ```bash
-   npm run dev
-   ```
-   This watches for file changes and automatically rebuilds. Output is unminified with inline sourcemaps for debugging.
+1. Go to `about:debugging#/runtime/this-firefox`
+2. Load the manifest build in `./dist/firefox-mv3`
+3. Configure the extension to use the local Pi-hole instance
 
-2. **Load the extension in Firefox**
-    - Navigate to `about:debugging#/runtime/this-firefox`
-    - Click "Load Temporary Add-on..."
-    - Select `dist/manifest.json`
+### Packaging
 
-3. **Reload after changes**
-    - After esbuild rebuilds (watch the terminal for "Build complete"), click the "Reload" button next to PiSentinel in
-      `about:debugging`
-    - For popup/sidebar changes, close and reopen the popup/sidebar
-    - For background script changes, always reload the extension
+To package the extension for firefox:
+
+```bash
+# Install dependencies
+npm install
+
+npm run package
+```
+
+Then:
+
+1. Go to `about:debugging#/runtime/this-firefox`
+2. Load the created .xpi file `pisentil.xpi`
+3. Configure the extension to use the local Pi-hole instance
 
 ### Debugging
 
@@ -125,7 +128,7 @@ To add temporary debug logging:
 
 ```typescript
 // In any source file
-console.log('[PiSentinel]', 'Debug message', { data });
+console.log('[PiSentinel]', 'Debug message', {data});
 ```
 
 ### Available Scripts
