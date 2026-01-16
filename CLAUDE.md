@@ -47,13 +47,13 @@ npm run sign:channel   # Build and sign as unlisted
 
 1. **Start watch mode**: `npm run dev`
 2. **Load in Firefox**:
-    - Navigate to `about:debugging#/runtime/this-firefox`
-    - Click "Load Temporary Add-on..."
-    - Select `dist/manifest.json`
+   - Navigate to `about:debugging#/runtime/this-firefox`
+   - Click "Load Temporary Add-on..."
+   - Select `dist/manifest.json`
 3. **After changes**: Click "Reload" button in about:debugging
 4. **Debugging**:
-    - Background script: Inspect via about:debugging
-    - Popup/Sidebar/Options: Right-click → Inspect within the UI
+   - Background script: Inspect via about:debugging
+   - Popup/Sidebar/Options: Right-click → Inspect within the UI
 
 ## Architecture
 
@@ -62,12 +62,12 @@ npm run sign:channel   # Build and sign as unlisted
 The extension uses a centralized message-passing architecture where **all cross-context communication flows through the
 background script**:
 
-- **Popup/Sidebar/Options → Background**: Send messages via `sendMessage()` from `src/shared/messaging.ts`
+- **Popup/Sidebar/Options → Background**: Send messages via `sendMessage()` from `utils/messaging.ts`
 - **Background → API**: Background script handles all Pi-hole API calls
 - **Background → State**: Background script updates central state store
 - **State Changes**: Background script notifies listeners (badge, notifications)
 
-**Key Message Types** (defined in `src/shared/messaging.ts`):
+**Key Message Types** (defined in `utils/messaging.ts`):
 
 - `GET_STATE`: Retrieve current extension state
 - `CONNECT`: Authenticate with Pi-hole
@@ -122,13 +122,15 @@ All UI components are built with **Preact** and share styles/patterns:
 - **Sidebar** (`src/sidebar/`): Domain list per tab + query log
 - **Options** (`src/options/`): Server configuration and 2FA setup
 
-**Shared Resources** (`src/shared/`):
+**Shared Resources** (`utils/`):
 
 - `messaging.ts`: Message helpers for cross-context communication
 - `types.ts`: Shared TypeScript types
-- `constants.ts`: API endpoints, defaults, alarm names
-- `icons.tsx`: Preact icon components
-- `utils.ts`: Utility functions (domain parsing, etc.)
+- `constants.ts`: API endpoints, defaults, alarm names, error messages
+- `validation.ts`: Input validation and domain comparison utilities
+- `error-handler.ts`: Centralized error handling
+- `logger.ts`: Structured logging with production mode support
+- `utils.ts`: Utility functions (formatting, parsing, etc.)
 
 ### Session Management
 
@@ -188,7 +190,7 @@ All UI components are built with **Preact** and share styles/patterns:
 Always use the `apiClient` singleton from background script:
 
 ```typescript
-import { apiClient } from './api/client';
+import { apiClient } from "./api/client";
 
 const result = await apiClient.getStats();
 if (result.success) {
@@ -199,20 +201,20 @@ if (result.success) {
 ### Sending Messages from UI
 
 ```typescript
-import { sendMessage } from '../shared/messaging';
+import { sendMessage } from "~/utils/messaging";
 
 const response = await sendMessage({
-  type: 'TOGGLE_BLOCKING',
-  payload: { enabled: false, timer: 300 }
+  type: "TOGGLE_BLOCKING",
+  payload: { enabled: false, timer: 300 },
 });
 ```
 
 ### Updating State
 
 ```typescript
-import {store} from './state/store';
+import { store } from "./state/store";
 
-store.setState({isConnected: true, stats: newStats});
+store.setState({ isConnected: true, stats: newStats });
 ```
 
 ### Firefox MV3 Specifics
@@ -231,8 +233,8 @@ After making changes:
 3. **For popup changes**: Close and reopen the popup
 4. **For background changes**: Always reload the extension
 5. **Check console**:
-    - Background logs: Inspect via about:debugging
-    - UI logs: Right-click → Inspect in popup/sidebar
+   - Background logs: Inspect via about:debugging
+   - UI logs: Right-click → Inspect in popup/sidebar
 
 ## Common Issues
 
@@ -256,6 +258,6 @@ Check:
 
 Verify:
 
-- Message type exists in `MessageType` union (src/shared/messaging.ts)
+- Message type exists in `MessageType` union (utils/messaging.ts)
 - Background script has handler for message type
 - Response format matches `MessageResponse` type
