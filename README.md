@@ -79,9 +79,10 @@ npm run build:firefox
 
 Then:
 
-1. Go to `about:debugging#/runtime/this-firefox`
-2. Load the manifest build in `./dist/firefox-mv3`
-3. Configure the extension to use the local Pi-hole instance
+- Open Firefox and navigate to `about:debugging`
+- Click "This Firefox" in the sidebar
+- Click "Load Temporary Add-on..."
+- Select the `dist/manifest.json` file
 
 ### Packaging
 
@@ -96,9 +97,10 @@ npm run package
 
 Then:
 
-1. Go to `about:debugging#/runtime/this-firefox`
-2. Load the created .xpi file `pisentil.xpi`
-3. Configure the extension to use the local Pi-hole instance
+- Open Firefox and navigate to `about:debugging`
+- Click "This Firefox" in the sidebar
+- Click "Load Temporary Add-on..."
+- Select the `pisentinel.xpi` file
 
 ### Debugging
 
