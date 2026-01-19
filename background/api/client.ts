@@ -643,21 +643,27 @@ export class PiholeApiClient {
       if (typeof data !== "object" || data === null) {
         return "Stats response is not an object";
       }
-      if (typeof data.queries !== "number") {
-        return "Stats response missing 'queries' number";
+      if (typeof data.queries !== "object" || data.queries === null) {
+        return "Stats response missing 'queries' object";
       }
-      if (typeof data.blocked !== "number") {
-        return "Stats response missing 'blocked' number";
+      if (typeof data.queries.total !== "number") {
+        return "Stats response missing 'queries.total' number";
+      }
+      if (typeof data.queries.blocked !== "number") {
+        return "Stats response missing 'queries.blocked' number";
       }
     }
 
-    // Blocking status should have enabled boolean
+    // Blocking status should have blocking string
     if (endpoint === ENDPOINTS.DNS_BLOCKING) {
       if (typeof data !== "object" || data === null) {
         return "Blocking status response is not an object";
       }
-      if (typeof data.blocking !== "boolean") {
-        return "Blocking status response missing 'blocking' boolean";
+      if (typeof data.blocking !== "string") {
+        return "Blocking status response missing 'blocking' string";
+      }
+      if (data.blocking !== "enabled" && data.blocking !== "disabled") {
+        return "Blocking status 'blocking' must be 'enabled' or 'disabled'";
       }
     }
 
