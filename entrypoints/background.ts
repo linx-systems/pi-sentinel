@@ -24,6 +24,28 @@ export default defineBackground(() => {
    * - Domain tracking coordination
    */
 
+  // ===== Global Error Handlers =====
+  // Prevent silent crashes that cause "background script not reachable" errors
+
+  self.addEventListener("unhandledrejection", (event) => {
+    logger.error(
+      "[PiSentinel] Unhandled promise rejection:",
+      event.reason instanceof Error
+        ? { message: event.reason.message, stack: event.reason.stack }
+        : event.reason,
+    );
+  });
+
+  self.addEventListener("error", (event) => {
+    logger.error("[PiSentinel] Uncaught error:", {
+      message: event.message,
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno,
+      error: event.error,
+    });
+  });
+
   // ===== Initialization =====
 
   async function initialize(): Promise<void> {
@@ -494,8 +516,21 @@ export default defineBackground(() => {
   );
   logger.debug("[Background] Message listener registered");
 
-  // Register alarm listener at top level
-  browser.alarms.onAlarm.addListener(handleAlarm);
+  // Register alarm listener at top level with error isolation
+  // Wrap to prevent alarm errors from crashing the background script
+  browser.alarms.onAlarm.addListener(async (alarm) => {
+    try {
+      await handleAlarm(alarm);
+    } catch (error) {
+      logger.error(
+        `[PiSentinel] Error in alarm handler (${alarm.name}):`,
+        error instanceof Error
+          ? { message: error.message, stack: error.stack }
+          : error,
+      );
+      // Don't rethrow - let the background script continue running
+    }
+  });
 
   // WORKAROUND: Listen for storage changes for config saves and auth (browser.runtime.sendMessage is broken)
   // Configuration for storage-based request handlers
