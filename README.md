@@ -15,6 +15,12 @@ and manage domains directly from your browser.
 - **2FA Support** - Full TOTP authentication support for secured Pi-hole instances
 - **Secure Storage** - Credentials encrypted with PBKDF2 + AES-256-GCM
 
+## Screenshots
+
+| Settings                                 | Domain Sidebar                                    |
+| ---------------------------------------- | ------------------------------------------------- |
+| ![Settings](screenshots/config_view.png) | ![Domain Sidebar](screenshots/sidebar_domain.png) |
+
 ## Requirements
 
 - Firefox 115 or later
