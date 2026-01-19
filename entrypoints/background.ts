@@ -1,5 +1,5 @@
 import browser from "webextension-polyfill";
-import { defineBackground } from "wxt/sandbox";
+import { defineBackground } from "#imports";
 import { apiClient } from "~/background/api/client";
 import { authManager } from "~/background/api/auth";
 import { store } from "~/background/state/store";
