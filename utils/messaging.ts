@@ -220,6 +220,13 @@ export type SearchDomainResponse = MessageResponse<{
   gravity: boolean;
   allowlist: boolean;
   denylist: boolean;
+  instances?: Array<{
+    instanceId: string;
+    instanceName?: string;
+    gravity: boolean;
+    allowlist: boolean;
+    denylist: boolean;
+  }>;
 }>;
 
 // Multi-instance Response Types

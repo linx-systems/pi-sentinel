@@ -212,6 +212,10 @@ class StateStore {
       );
       this.notifyListeners();
       this.broadcastStateUpdate();
+    } else if (this.activeInstanceId === null) {
+      // In "All" mode, broadcast aggregated state when any instance updates
+      this.notifyListeners();
+      this.broadcastStateUpdate();
     }
   }
 

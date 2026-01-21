@@ -25,6 +25,13 @@ type SearchResult = {
   gravity: boolean;
   allowlist: boolean;
   denylist: boolean;
+  instances?: Array<{
+    instanceId: string;
+    instanceName?: string;
+    gravity: boolean;
+    allowlist: boolean;
+    denylist: boolean;
+  }>;
 };
 
 export function DomainList({
@@ -566,18 +573,44 @@ function DomainItem({
         </div>
       </div>
       {searchResult && (
-        <div class="search-result">
-          {searchResult.denylist ? (
-            <span class="status-denylist">● Denylisted</span>
-          ) : searchResult.allowlist ? (
-            <span class="status-allowlist">● Allowlisted</span>
-          ) : searchResult.gravity ? (
-            <span class="status-blocked">● Blocked (gravity)</span>
+        <div class="search-result domain-search-result">
+          {searchResult.instances && searchResult.instances.length > 1 ? (
+            <div class="instance-search-results">
+              {searchResult.instances.map((res) => {
+                const label = res.instanceName || res.instanceId;
+                return (
+                  <div class="instance-search-row" key={label}>
+                    <span class="instance-badge">{label}</span>
+                    <span class="search-status">
+                      {res.denylist ? (
+                        <span class="status-denylist">● Denylisted</span>
+                      ) : res.allowlist ? (
+                        <span class="status-allowlist">● Allowlisted</span>
+                      ) : res.gravity ? (
+                        <span class="status-blocked">● Blocked (gravity)</span>
+                      ) : (
+                        <span class="status-allowed">○ Not in blocklist</span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           ) : (
-            <span class="status-allowed">○ Not in blocklist</span>
+            <>
+              {searchResult.denylist ? (
+                <span class="status-denylist">● Denylisted</span>
+              ) : searchResult.allowlist ? (
+                <span class="status-allowlist">● Allowlisted</span>
+              ) : searchResult.gravity ? (
+                <span class="status-blocked">● Blocked (gravity)</span>
+              ) : (
+                <span class="status-allowed">○ Not in blocklist</span>
+              )}
+            </>
           )}
           <button
-            class="dismiss-btn"
+            class="dismiss-btn two-row"
             onClick={() => onSearchResult(null)}
             title="Dismiss"
           >

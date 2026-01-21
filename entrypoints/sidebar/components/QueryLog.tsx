@@ -13,10 +13,19 @@ import { logger } from "~/utils/logger";
 import type { QueryEntry } from "~/utils/types";
 import type { MessageResponse } from "~/utils/messaging";
 
+type InstanceSearchResult = {
+  instanceId: string;
+  instanceName?: string;
+  gravity: boolean;
+  allowlist: boolean;
+  denylist: boolean;
+};
+
 type SearchResult = {
   gravity: boolean;
   allowlist: boolean;
   denylist: boolean;
+  instances?: InstanceSearchResult[];
 };
 
 interface QueryLogProps {
@@ -433,33 +442,65 @@ function QueryItem({
 
         {searchResult && (
           <div class="search-result">
-            {searchResult.denylist ? (
-              <span class="status-denylist" data-bullet="●">
-                Denylisted
-              </span>
-            ) : searchResult.allowlist ? (
-              <span class="status-allowlist" data-bullet="●">
-                Allowlisted
-              </span>
-            ) : searchResult.gravity ? (
-              <span class="status-blocked" data-bullet="●">
-                Blocked (gravity)
-              </span>
+            {searchResult.instances && searchResult.instances.length > 1 ? (
+              <div class="instance-search-results">
+                {searchResult.instances.map((res) => {
+                  const label = res.instanceName || res.instanceId;
+                  return (
+                    <div class="instance-search-row" key={label}>
+                      <span class="instance-badge">{label}</span>
+                      {res.denylist ? (
+                        <span class="status-denylist" data-bullet="●">
+                          Denylisted
+                        </span>
+                      ) : res.allowlist ? (
+                        <span class="status-allowlist" data-bullet="●">
+                          Allowlisted
+                        </span>
+                      ) : res.gravity ? (
+                        <span class="status-blocked" data-bullet="●">
+                          Blocked (gravity)
+                        </span>
+                      ) : (
+                        <span class="status-allowed" data-bullet="○">
+                          Not in blocklist
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
-              <span class="status-allowed" data-bullet="○">
-                Not in blocklist
-              </span>
-            )}
-            {(searchResult.allowlist || searchResult.denylist) && (
-              <button
-                class="remove-btn"
-                onClick={() =>
-                  handleRemove(searchResult.allowlist ? "allow" : "deny")
-                }
-                title="Remove from list"
-              >
-                Remove
-              </button>
+              <>
+                {searchResult.denylist ? (
+                  <span class="status-denylist" data-bullet="●">
+                    Denylisted
+                  </span>
+                ) : searchResult.allowlist ? (
+                  <span class="status-allowlist" data-bullet="●">
+                    Allowlisted
+                  </span>
+                ) : searchResult.gravity ? (
+                  <span class="status-blocked" data-bullet="●">
+                    Blocked (gravity)
+                  </span>
+                ) : (
+                  <span class="status-allowed" data-bullet="○">
+                    Not in blocklist
+                  </span>
+                )}
+                {(searchResult.allowlist || searchResult.denylist) && (
+                  <button
+                    class="remove-btn"
+                    onClick={() =>
+                      handleRemove(searchResult.allowlist ? "allow" : "deny")
+                    }
+                    title="Remove from list"
+                  >
+                    Remove
+                  </button>
+                )}
+              </>
             )}
             <button
               class="dismiss-btn"

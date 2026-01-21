@@ -491,25 +491,28 @@ export default defineBackground(() => {
   async function handleSearchDomain(
     domain: string,
   ): Promise<
-    MessageResponse<{ gravity: boolean; allowlist: boolean; denylist: boolean }>
+    MessageResponse<{
+      gravity: boolean;
+      allowlist: boolean;
+      denylist: boolean;
+      instances?: Array<{
+        instanceId: string;
+        instanceName?: string;
+        gravity: boolean;
+        allowlist: boolean;
+        denylist: boolean;
+      }>;
+    }>
   > {
-    const client = getActiveClient();
-    const result = await client.searchDomain(domain);
+    const activeId = store.getActiveInstanceId();
 
-    if (result.success && result.data) {
-      const data = result.data as unknown as Record<string, unknown>;
-      logger.info("Search API response:", JSON.stringify(data, null, 2));
-
-      // Handle Pi-hole v6 API response structure
-      // API returns: { search: { domains: [...], gravity: [...] } }
+    const parseResult = (raw: unknown) => {
+      const data = raw as Record<string, unknown>;
       const searchData = (data.search as Record<string, unknown>) || data;
       const gravity = searchData.gravity;
       const domains = searchData.domains as unknown[];
 
-      // gravity is an array of matching blocklist entries
       const gravityCount = Array.isArray(gravity) ? gravity.length : 0;
-
-      // domains is an array - check for allow/deny entries
       const allowlist = Array.isArray(domains)
         ? domains.filter((d: any) => d.type === "allow")
         : [];
@@ -518,16 +521,89 @@ export default defineBackground(() => {
         : [];
 
       return {
-        success: true,
-        data: {
-          gravity: gravityCount > 0,
-          allowlist: allowlist.length > 0,
-          denylist: denylist.length > 0,
-        },
+        gravity: gravityCount > 0,
+        allowlist: allowlist.length > 0,
+        denylist: denylist.length > 0,
       };
+    };
+
+    // Single-instance mode
+    if (activeId) {
+      const client = apiClientManager.getClient(activeId);
+      const result = await client.searchDomain(domain);
+
+      if (result.success && result.data) {
+        const parsed = parseResult(result.data);
+        const instance = await instanceManager.getInstance(activeId);
+        return {
+          success: true,
+          data: {
+            ...parsed,
+            instances: [
+              {
+                instanceId: activeId,
+                instanceName: instance
+                  ? instanceManager.getDisplayName(instance)
+                  : undefined,
+                ...parsed,
+              },
+            ],
+          },
+        };
+      }
+
+      return { success: false, error: result.error?.message };
     }
 
-    return { success: false, error: result.error?.message };
+    // "All" mode - query all connected instances
+    const config = await instanceManager.getInstances();
+    const connectedInstances = config.instances.filter((instance) => {
+      const state = store.getInstanceState(instance.id);
+      return state?.isConnected;
+    });
+
+    const results: Array<{
+      instanceId: string;
+      instanceName?: string;
+      gravity: boolean;
+      allowlist: boolean;
+      denylist: boolean;
+    }> = [];
+
+    for (const instance of connectedInstances) {
+      try {
+        const client = apiClientManager.getClient(instance.id);
+        const result = await client.searchDomain(domain);
+
+        if (result.success && result.data) {
+          const parsed = parseResult(result.data);
+          results.push({
+            instanceId: instance.id,
+            instanceName: instanceManager.getDisplayName(instance),
+            ...parsed,
+          });
+        } else {
+          logger.warn(
+            `[Background] Search failed for instance ${instance.id}:`,
+            result.error?.message,
+          );
+        }
+      } catch (error) {
+        logger.warn(
+          `[Background] Error searching domain for instance ${instance.id}:`,
+          error,
+        );
+      }
+    }
+
+    const aggregated = {
+      gravity: results.some((r) => r.gravity),
+      allowlist: results.some((r) => r.allowlist),
+      denylist: results.some((r) => r.denylist),
+      instances: results,
+    };
+
+    return { success: true, data: aggregated };
   }
 
   async function handleGetQueries(payload?: {
