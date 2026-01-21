@@ -16,6 +16,10 @@ export const ENDPOINTS = {
 export const STORAGE_KEYS = {
   CONFIG: "pisentinel_config",
   SESSION: "pisentinel_session",
+  /** Multi-instance configuration storage key */
+  INSTANCES: "pisentinel_instances",
+  /** Per-instance session storage prefix (append instance ID) */
+  INSTANCE_SESSION_PREFIX: "pisentinel_session_",
 } as const;
 
 // Alarm Names
@@ -33,6 +37,8 @@ export const DEFAULTS = {
   PBKDF2_ITERATIONS: 100000,
   SALT_LENGTH: 16,
   IV_LENGTH: 12,
+  /** Cache TTL for stats/blocking status (ms) - reduces API calls when switching instances */
+  CACHE_TTL: 30000, // 30 seconds
 } as const;
 
 // Extension-specific entropy for encrypting the master key when "Remember Password" is enabled

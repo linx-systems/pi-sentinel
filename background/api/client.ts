@@ -717,5 +717,94 @@ export class PiholeApiClient {
   }
 }
 
-// Singleton instance
+// Legacy singleton instance (for backwards compatibility during migration)
 export const apiClient = new PiholeApiClient();
+
+/**
+ * API Client Manager
+ *
+ * Factory class that manages multiple PiholeApiClient instances,
+ * one per configured Pi-hole server.
+ */
+export class ApiClientManager {
+  private clients: Map<string, PiholeApiClient> = new Map();
+  private authHandlers: Map<string, () => Promise<boolean>> = new Map();
+
+  /**
+   * Get or create an API client for an instance.
+   */
+  getClient(instanceId: string): PiholeApiClient {
+    let client = this.clients.get(instanceId);
+    if (!client) {
+      client = new PiholeApiClient();
+      this.clients.set(instanceId, client);
+
+      // Set up auth handler if registered
+      const authHandler = this.authHandlers.get(instanceId);
+      if (authHandler) {
+        client.setAuthRequiredHandler(authHandler);
+      }
+    }
+    return client;
+  }
+
+  /**
+   * Check if a client exists for an instance.
+   */
+  hasClient(instanceId: string): boolean {
+    return this.clients.has(instanceId);
+  }
+
+  /**
+   * Remove a client for an instance.
+   */
+  removeClient(instanceId: string): void {
+    const client = this.clients.get(instanceId);
+    if (client) {
+      client.clearSession();
+      this.clients.delete(instanceId);
+    }
+    this.authHandlers.delete(instanceId);
+  }
+
+  /**
+   * Configure a client with a base URL.
+   */
+  configureClient(instanceId: string, baseUrl: string): PiholeApiClient {
+    const client = this.getClient(instanceId);
+    client.setBaseUrl(baseUrl);
+    return client;
+  }
+
+  /**
+   * Set auth required handler for an instance.
+   */
+  setAuthHandler(instanceId: string, handler: () => Promise<boolean>): void {
+    this.authHandlers.set(instanceId, handler);
+    const client = this.clients.get(instanceId);
+    if (client) {
+      client.setAuthRequiredHandler(handler);
+    }
+  }
+
+  /**
+   * Get all instance IDs with active clients.
+   */
+  getActiveInstanceIds(): string[] {
+    return Array.from(this.clients.keys());
+  }
+
+  /**
+   * Clear all clients.
+   */
+  clear(): void {
+    for (const client of this.clients.values()) {
+      client.clearSession();
+    }
+    this.clients.clear();
+    this.authHandlers.clear();
+  }
+}
+
+// Singleton manager instance
+export const apiClientManager = new ApiClientManager();

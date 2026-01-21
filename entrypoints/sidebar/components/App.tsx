@@ -3,6 +3,7 @@ import browser from "webextension-polyfill";
 import { DomainList } from "./DomainList";
 import { QueryLog } from "./QueryLog";
 import { ToastProvider, useToast } from "./ToastContext";
+import { InstanceSelector } from "~/components/InstanceSelector";
 import { logger } from "~/utils/logger";
 import type {
   MessageResponse,
@@ -142,7 +143,10 @@ function AppContent() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <header class="header">
-        <h1>PiSentinel Domains</h1>
+        <div class="header-top">
+          <h1>PiSentinel Domains</h1>
+          <InstanceSelector compact />
+        </div>
         {tabDomains && (
           <div class="current-site" title={tabDomains.pageUrl}>
             {tabDomains.firstPartyDomain}

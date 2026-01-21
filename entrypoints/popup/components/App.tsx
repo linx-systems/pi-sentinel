@@ -2,6 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { StatsCard } from "./StatsCard";
 import { BlockingToggle } from "./BlockingToggle";
+import { InstanceSelector } from "~/components/InstanceSelector";
 import { DomainIcon, ExternalLinkIcon, SettingsIcon } from "~/utils/icons";
 import { formatNumber } from "~/utils/utils";
 import { logger } from "~/utils/logger";
@@ -120,6 +121,11 @@ export function App() {
     );
   }
 
+  const handleInstanceChange = () => {
+    // Refresh state when instance changes
+    refetch();
+  };
+
   return (
     <div>
       <header class="header">
@@ -127,9 +133,12 @@ export function App() {
           <img src="../icons/icon-32.svg" alt="" class="logo" />
           PiSentinel
         </h1>
-        <button class="settings-btn" onClick={openOptions} title="Settings">
-          <SettingsIcon />
-        </button>
+        <div class="header-actions">
+          <InstanceSelector onInstanceChange={handleInstanceChange} compact />
+          <button class="settings-btn" onClick={openOptions} title="Settings">
+            <SettingsIcon />
+          </button>
+        </div>
       </header>
 
       <div

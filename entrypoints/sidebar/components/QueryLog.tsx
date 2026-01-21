@@ -45,6 +45,12 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
   // Track if initial load has happened (not relying on queries.length due to closure issues)
   const hasLoadedOnce = useRef(false);
 
+  const getQueryKey = (q: QueryEntry) =>
+    `${q.instanceId || "single"}-${q.id ?? `${q.timestamp}-${q.domain}`}`;
+
+  const sortQueries = (items: QueryEntry[]) =>
+    [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
   // Phase 4: Load auto-refresh preference on mount
   useEffect(() => {
     browser.storage.local.get("pisentinel_queryAutoRefresh").then((result) => {
@@ -159,25 +165,33 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
 
       if (response?.success && response.data) {
         const queryData = Array.isArray(response.data) ? response.data : [];
+        const normalized = sortQueries(
+          queryData.map((q) => ({
+            ...q,
+            // Some Pi-hole versions return "time" instead of timestamp
+            timestamp:
+              typeof q.timestamp === "number"
+                ? q.timestamp
+                : Number((q as any).time ?? 0) || 0,
+          })),
+        );
 
         if (isInitialLoad) {
-          // First load - replace with full list
-          setQueries(queryData);
+          setQueries(normalized);
           hasLoadedOnce.current = true;
         } else {
-          // After initial load - ALWAYS prepend new queries only
           setQueries((prev) => {
-            const existingIds = new Set(prev.map((q) => q.id));
-            const newQueries = queryData.filter((q) => !existingIds.has(q.id));
+            const existingIds = new Set(prev.map((q) => getQueryKey(q)));
+            const newQueries = normalized.filter(
+              (q) => !existingIds.has(getQueryKey(q)),
+            );
 
-            if (newQueries.length > 0) {
-              if (isScrolledDown) {
-                setNewQueryCount((prevCount) => prevCount + newQueries.length);
-              }
-              return [...newQueries, ...prev];
-            } else {
-              return prev;
+            if (newQueries.length > 0 && isScrolledDown) {
+              setNewQueryCount((prevCount) => prevCount + newQueries.length);
             }
+
+            // Use the normalized/sorted list so we keep cross-instance order
+            return normalized;
           });
         }
       }
@@ -280,7 +294,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
           {filteredQueries.map((query, index) =>
             query ? (
               <QueryItem
-                key={query.id || index}
+                key={getQueryKey(query) || index}
                 query={query}
                 onAddToList={onAddToList}
                 searchResult={searchResults.get(query.domain) || null}
@@ -324,6 +338,7 @@ function QueryItem({
   onSearchResult,
 }: QueryItemProps) {
   const blocked = isQueryBlocked(query.status);
+  const instanceLabel = query.instanceName || query.instanceId;
 
   // Handle timestamp - Pi-hole v6 uses 'time' as Unix timestamp (seconds with decimals)
   const rawTime = (query as any).time || query.timestamp;
@@ -384,6 +399,11 @@ function QueryItem({
           <div class="domain" title={query.domain}>
             {query.domain || "unknown"}
           </div>
+          {instanceLabel && (
+            <span class="instance-badge" title={`From ${instanceLabel}`}>
+              {instanceLabel}
+            </span>
+          )}
           {hasValidDomain && (
             <div class="domain-actions">
               <button
@@ -453,6 +473,7 @@ function QueryItem({
 
         <div class="meta">
           {query.type || "?"} - {clientInfo} - {timeStr}
+          {instanceLabel ? ` - ${instanceLabel}` : ""}
         </div>
       </div>
     </div>

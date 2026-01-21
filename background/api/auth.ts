@@ -1,7 +1,12 @@
 import browser from "webextension-polyfill";
 import { apiClient } from "./client";
 import { encryption } from "../crypto/encryption";
-import { ALARMS, DEFAULTS, STORAGE_KEYS } from "~/utils/constants";
+import {
+  ALARMS,
+  DEFAULTS,
+  EXTENSION_ENTROPY,
+  STORAGE_KEYS,
+} from "~/utils/constants";
 import { logger } from "~/utils/logger";
 import { ErrorHandler, ErrorType } from "~/utils/error-handler";
 import type {

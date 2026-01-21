@@ -1,6 +1,10 @@
 import type {
+  AggregatedState,
   BlockingStatus,
   ExtensionState,
+  InstanceState,
+  PersistedInstances,
+  PiHoleInstance,
   QueryEntry,
   StatsSummary,
   TabDomainData,
@@ -27,7 +31,17 @@ export type MessageType =
   | "TEST_CONNECTION"
   | "HEALTH_CHECK"
   | "STATE_UPDATED"
-  | "TAB_DOMAINS_UPDATED";
+  | "TAB_DOMAINS_UPDATED"
+  // Multi-instance message types
+  | "GET_INSTANCES"
+  | "ADD_INSTANCE"
+  | "UPDATE_INSTANCE"
+  | "DELETE_INSTANCE"
+  | "SET_ACTIVE_INSTANCE"
+  | "CONNECT_INSTANCE"
+  | "DISCONNECT_INSTANCE"
+  | "GET_INSTANCE_STATE"
+  | "GET_AGGREGATED_STATE";
 
 // Message Payloads
 export interface AuthenticatePayload {
@@ -62,6 +76,45 @@ export interface TestConnectionPayload {
   url: string;
 }
 
+// Multi-instance Payloads
+export interface AddInstancePayload {
+  name: string | null;
+  piholeUrl: string;
+  password: string;
+  rememberPassword: boolean;
+}
+
+export interface UpdateInstancePayload {
+  instanceId: string;
+  name?: string | null;
+  piholeUrl?: string;
+  password?: string;
+  rememberPassword?: boolean;
+}
+
+export interface DeleteInstancePayload {
+  instanceId: string;
+}
+
+export interface SetActiveInstancePayload {
+  /** Instance ID to set as active, or null for "All" mode */
+  instanceId: string | null;
+}
+
+export interface ConnectInstancePayload {
+  instanceId: string;
+  password: string;
+  totp?: string;
+}
+
+export interface DisconnectInstancePayload {
+  instanceId: string;
+}
+
+export interface GetInstanceStatePayload {
+  instanceId: string;
+}
+
 // Response Types
 export interface MessageResponse<T = unknown> {
   success: boolean;
@@ -88,7 +141,17 @@ export type Message =
   | { type: "TEST_CONNECTION"; payload: TestConnectionPayload }
   | { type: "HEALTH_CHECK" }
   | { type: "STATE_UPDATED"; payload: Partial<ExtensionState> }
-  | { type: "TAB_DOMAINS_UPDATED"; payload: SerializableTabDomains };
+  | { type: "TAB_DOMAINS_UPDATED"; payload: SerializableTabDomains }
+  // Multi-instance messages
+  | { type: "GET_INSTANCES" }
+  | { type: "ADD_INSTANCE"; payload: AddInstancePayload }
+  | { type: "UPDATE_INSTANCE"; payload: UpdateInstancePayload }
+  | { type: "DELETE_INSTANCE"; payload: DeleteInstancePayload }
+  | { type: "SET_ACTIVE_INSTANCE"; payload: SetActiveInstancePayload }
+  | { type: "CONNECT_INSTANCE"; payload: ConnectInstancePayload }
+  | { type: "DISCONNECT_INSTANCE"; payload: DisconnectInstancePayload }
+  | { type: "GET_INSTANCE_STATE"; payload: GetInstanceStatePayload }
+  | { type: "GET_AGGREGATED_STATE" };
 
 // Serializable version of TabDomainData for messaging
 export interface SerializableTabDomains {
@@ -158,3 +221,16 @@ export type SearchDomainResponse = MessageResponse<{
   allowlist: boolean;
   denylist: boolean;
 }>;
+
+// Multi-instance Response Types
+export type GetInstancesResponse = MessageResponse<PersistedInstances>;
+export type AddInstanceResponse = MessageResponse<PiHoleInstance>;
+export type UpdateInstanceResponse = MessageResponse<PiHoleInstance>;
+export type DeleteInstanceResponse = MessageResponse<void>;
+export type SetActiveInstanceResponse = MessageResponse<void>;
+export type ConnectInstanceResponse = MessageResponse<{
+  totpRequired?: boolean;
+}>;
+export type DisconnectInstanceResponse = MessageResponse<void>;
+export type GetInstanceStateResponse = MessageResponse<InstanceState>;
+export type GetAggregatedStateResponse = MessageResponse<AggregatedState>;
