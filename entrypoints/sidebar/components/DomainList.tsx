@@ -574,9 +574,9 @@ function DomainItem({
       </div>
       {searchResult && (
         <div class="search-result domain-search-result">
-          {searchResult.instances && searchResult.instances.length > 1 ? (
-            <div class="instance-search-results">
-              {searchResult.instances.map((res) => {
+          <div class="instance-search-results">
+            {searchResult.instances && searchResult.instances.length > 0 ? (
+              searchResult.instances.map((res) => {
                 const label = res.instanceName || res.instanceId;
                 return (
                   <div class="instance-search-row" key={label}>
@@ -594,21 +594,21 @@ function DomainItem({
                     </span>
                   </div>
                 );
-              })}
-            </div>
-          ) : (
-            <>
-              {searchResult.denylist ? (
-                <span class="status-denylist">● Denylisted</span>
-              ) : searchResult.allowlist ? (
-                <span class="status-allowlist">● Allowlisted</span>
-              ) : searchResult.gravity ? (
-                <span class="status-blocked">● Blocked (gravity)</span>
-              ) : (
-                <span class="status-allowed">○ Not in blocklist</span>
-              )}
-            </>
-          )}
+              })
+            ) : (
+              <div class="instance-search-row">
+                {searchResult.denylist ? (
+                  <span class="status-denylist">● Denylisted</span>
+                ) : searchResult.allowlist ? (
+                  <span class="status-allowlist">● Allowlisted</span>
+                ) : searchResult.gravity ? (
+                  <span class="status-blocked">● Blocked (gravity)</span>
+                ) : (
+                  <span class="status-allowed">○ Not in blocklist</span>
+                )}
+              </div>
+            )}
+          </div>
           <button
             class="dismiss-btn two-row"
             onClick={() => onSearchResult(null)}

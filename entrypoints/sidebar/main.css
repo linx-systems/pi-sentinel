@@ -264,7 +264,7 @@ body {
 }
 
 .search-result .dismiss-btn.two-row {
-  grid-row: 1 / span 2;
+  align-self: flex-start;
 }
 
 .search-result .dismiss-btn:hover {
@@ -355,26 +355,27 @@ body {
   flex-wrap: wrap;
 }
 
-.instance-search-results {
+.domain-search-result {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-}
-
-.instance-search-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   width: 100%;
 }
 
-.domain-search-result {
-  align-items: stretch;
+.domain-search-result .instance-search-results {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.search-status {
+.domain-search-result .instance-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.domain-search-result .search-status {
   display: block;
 }
 
