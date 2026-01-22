@@ -240,48 +240,54 @@ export function InstanceModal({
               </p>
             </div>
 
-            <div class="form-group">
-              <label for="instance-password">
-                Web Interface Password
-                {isEditMode && " (leave blank to keep current)"}
-              </label>
-              <input
-                type="password"
-                id="instance-password"
-                value={password}
-                onInput={(e) =>
-                  setPassword((e.target as HTMLInputElement).value)
-                }
-                placeholder={
-                  isEditMode ? "Enter new password" : "Leave blank if none"
-                }
-                disabled={isLoading || noPassword}
-              />
-              <p class="hint">
-                {isEditMode
-                  ? "Leave blank to keep the current password. If this Pi-hole has no password, leaving it blank is fine."
-                  : "Leave blank if this Pi-hole doesn't require a password."}
-              </p>
-            </div>
+            {!noPassword && (
+              <>
+                <div class="form-group">
+                  <label for="instance-password">
+                    Web Interface Password
+                    {isEditMode && " (leave blank to keep current)"}
+                  </label>
+                  <input
+                    type="password"
+                    id="instance-password"
+                    value={password}
+                    onInput={(e) =>
+                      setPassword((e.target as HTMLInputElement).value)
+                    }
+                    placeholder={
+                      isEditMode ? "Enter new password" : "Leave blank if none"
+                    }
+                    disabled={isLoading}
+                  />
+                  <p class="hint">
+                    {isEditMode
+                      ? "Leave blank to keep the current password. If this Pi-hole has no password, leaving it blank is fine."
+                      : "Leave blank if this Pi-hole doesn't require a password."}
+                  </p>
+                </div>
 
-            <div class="form-group">
-              <label class="checkbox-label">
-                <input
-                  type="checkbox"
-                  id="instance-remember"
-                  checked={rememberPassword}
-                  onChange={(e) =>
-                    setRememberPassword((e.target as HTMLInputElement).checked)
-                  }
-                  disabled={isLoading || noPassword}
-                />
-                <span class="checkbox-text">Remember Password</span>
-              </label>
-              <p class="hint">
-                Stay logged in across browser restarts. Password is encrypted
-                but stored locally. Disable on shared computers.
-              </p>
-            </div>
+                <div class="form-group">
+                  <label class="checkbox-label">
+                    <input
+                      type="checkbox"
+                      id="instance-remember"
+                      checked={rememberPassword}
+                      onChange={(e) =>
+                        setRememberPassword(
+                          (e.target as HTMLInputElement).checked,
+                        )
+                      }
+                      disabled={isLoading}
+                    />
+                    <span class="checkbox-text">Remember Password</span>
+                  </label>
+                  <p class="hint">
+                    Stay logged in across browser restarts. Password is
+                    encrypted but stored locally. Disable on shared computers.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
 
           <div class="modal-footer">
