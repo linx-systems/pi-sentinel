@@ -1,12 +1,18 @@
-import { useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { StatsCard } from "./StatsCard";
 import { BlockingToggle } from "./BlockingToggle";
 import { InstanceSelector } from "~/components/InstanceSelector";
 import { DomainIcon, ExternalLinkIcon, SettingsIcon } from "~/utils/icons";
+import { DEFAULTS, STORAGE_KEYS } from "~/utils/constants";
 import { formatNumber } from "~/utils/utils";
 import { logger } from "~/utils/logger";
-import type { PersistedConfig } from "~/utils/types";
+import type { MessageResponse } from "~/utils/messaging";
+import type {
+  PersistedConfig,
+  PersistedInstances,
+  PiHoleInstance,
+} from "~/utils/types";
 import { useExtensionState } from "~/utils/hooks/useExtensionState";
 
 type ViewState = "loading" | "not-configured" | "connected" | "error";
@@ -17,10 +23,15 @@ export function App() {
   const [viewState, setViewState] = useState<ViewState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [piholeUrl, setPiholeUrl] = useState<string | null>(null);
+  const [instances, setInstances] = useState<PiHoleInstance[]>([]);
+  const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
+  const [instancesLoaded, setInstancesLoaded] = useState(false);
+  const hasInstances = instances.length > 0;
+  const lastStatsRequest = useRef<{ key: string; at: number } | null>(null);
 
   // Update viewState based on extension state
   useEffect(() => {
-    if (isLoading) {
+    if (isLoading || !instancesLoaded) {
       setViewState("loading");
       return;
     }
@@ -33,33 +44,122 @@ export function App() {
 
     if (state?.isConnected) {
       setViewState("connected");
-      // Fetch fresh stats
-      browser.runtime.sendMessage({ type: "GET_STATS" });
-      browser.runtime.sendMessage({ type: "GET_BLOCKING_STATUS" });
     } else if (state?.connectionError) {
       setViewState("error");
       setError(state.connectionError);
     } else {
       setViewState("not-configured");
     }
-  }, [state, isLoading, stateError]);
+  }, [
+    state,
+    isLoading,
+    stateError,
+    hasInstances,
+    activeInstanceId,
+    instancesLoaded,
+  ]);
 
-  // Fetch Pi-hole URL from storage on mount
   useEffect(() => {
-    const fetchConfig = async () => {
+    if (!instancesLoaded || !state?.isConnected) return;
+    if (hasInstances && activeInstanceId === null) return;
+
+    const key = hasInstances ? (activeInstanceId ?? "legacy") : "legacy";
+    const now = Date.now();
+    const lastUpdated = state?.statsLastUpdated || 0;
+    const statsStale = now - lastUpdated > DEFAULTS.CACHE_TTL;
+    const lastRequest = lastStatsRequest.current;
+    const requestExpired =
+      !lastRequest ||
+      lastRequest.key !== key ||
+      now - lastRequest.at > DEFAULTS.CACHE_TTL;
+
+    if (statsStale && requestExpired) {
+      lastStatsRequest.current = { key, at: now };
+      void browser.runtime
+        .sendMessage({ type: "GET_STATS" })
+        .catch((err) =>
+          logger.debug("Failed to fetch stats for popup:", err),
+        );
+      void browser.runtime
+        .sendMessage({ type: "GET_BLOCKING_STATUS" })
+        .catch((err) =>
+          logger.debug("Failed to fetch blocking status for popup:", err),
+        );
+    }
+  }, [
+    instancesLoaded,
+    state?.isConnected,
+    state?.statsLastUpdated,
+    hasInstances,
+    activeInstanceId,
+  ]);
+
+  const loadInstances = useCallback(async () => {
+    let config: PersistedInstances | null = null;
+
+    try {
+      const response = (await browser.runtime.sendMessage({
+        type: "GET_INSTANCES",
+      })) as MessageResponse<PersistedInstances>;
+
+      if (response?.success && response.data) {
+        config = response.data;
+      }
+    } catch (err) {
+      logger.error("Failed to fetch instances:", err);
+    }
+
+    if (!config) {
       try {
-        const storage = await browser.storage.local.get("pisentinel_config");
-        const config = storage.pisentinel_config as PersistedConfig | undefined;
-        if (config?.piholeUrl) {
-          setPiholeUrl(config.piholeUrl);
+        const stored = await browser.storage.local.get(STORAGE_KEYS.INSTANCES);
+        const storedConfig = stored[
+          STORAGE_KEYS.INSTANCES
+        ] as PersistedInstances | undefined;
+        if (storedConfig) {
+          config = storedConfig;
         }
       } catch (err) {
-        logger.error("Failed to fetch config:", err);
+        logger.error("Failed to read instances from storage:", err);
+      }
+    }
+
+    if (config && config.instances.length > 0) {
+      setInstances(config.instances);
+      setActiveInstanceId(config.activeInstanceId ?? null);
+      setPiholeUrl(null);
+      setInstancesLoaded(true);
+      return;
+    }
+
+    try {
+      const storage = await browser.storage.local.get(STORAGE_KEYS.CONFIG);
+      const legacy = storage[STORAGE_KEYS.CONFIG] as
+        | PersistedConfig
+        | undefined;
+      if (legacy?.piholeUrl) {
+        setPiholeUrl(legacy.piholeUrl);
+      }
+    } catch (err) {
+      logger.error("Failed to fetch legacy config:", err);
+    } finally {
+      setInstancesLoaded(true);
+    }
+  }, []);
+
+  // Fetch instance config on mount and when instance list changes
+  useEffect(() => {
+    loadInstances();
+
+    const handleMessage = (message: unknown) => {
+      const msg = message as { type: string };
+      if (msg.type === "INSTANCES_UPDATED") {
+        loadInstances();
       }
     };
 
-    fetchConfig();
-  }, []);
+    browser.runtime.onMessage.addListener(handleMessage);
+    return () => browser.runtime.onMessage.removeListener(handleMessage);
+  }, [loadInstances]);
 
   const openOptions = () => {
     browser.runtime.openOptionsPage();
@@ -76,9 +176,21 @@ export function App() {
     }
   };
 
+  const effectiveInstance = activeInstanceId
+    ? instances.find((instance) => instance.id === activeInstanceId)
+    : instances.length === 1
+      ? instances[0]
+      : null;
+  const adminUrl = hasInstances
+    ? effectiveInstance?.piholeUrl ?? null
+    : piholeUrl;
+  const showAdminLink =
+    Boolean(adminUrl) &&
+    (!hasInstances || activeInstanceId !== null || instances.length === 1);
+
   const openAdminPage = () => {
-    if (piholeUrl) {
-      browser.tabs.create({ url: `${piholeUrl}/admin` });
+    if (adminUrl) {
+      browser.tabs.create({ url: `${adminUrl}/admin` });
     }
   };
 
@@ -121,9 +233,25 @@ export function App() {
     );
   }
 
-  const handleInstanceChange = () => {
-    // Refresh state when instance changes
+  const handleInstanceChange = (instanceId: string | null) => {
+    setActiveInstanceId(instanceId);
     refetch();
+
+    if (!hasInstances || instanceId !== null) {
+      void browser.runtime
+        .sendMessage({ type: "GET_STATS" })
+        .catch((err) =>
+          logger.debug("Failed to fetch stats after instance switch:", err),
+        );
+      void browser.runtime
+        .sendMessage({ type: "GET_BLOCKING_STATUS" })
+        .catch((err) =>
+          logger.debug(
+            "Failed to fetch blocking status after instance switch:",
+            err,
+          ),
+        );
+    }
   };
 
   return (
@@ -190,7 +318,7 @@ export function App() {
           <DomainIcon />
           View domains
         </a>
-        {piholeUrl && (
+        {showAdminLink && (
           <a
             href="#"
             class="footer-link"

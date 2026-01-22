@@ -274,6 +274,7 @@ export default defineBackground(() => {
         version: "0.0.1",
       },
     }),
+    INSTANCES_UPDATED: () => ({ success: true }),
     // Multi-instance handlers
     GET_INSTANCES: () => handleGetInstances(),
     ADD_INSTANCE: (payload) => handleAddInstance(payload),
@@ -751,6 +752,18 @@ export default defineBackground(() => {
     }
   }
 
+  async function broadcastInstancesUpdated(): Promise<void> {
+    try {
+      await browser.runtime.sendMessage({ type: "INSTANCES_UPDATED" });
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      if (!errorMessage.includes("Could not establish connection")) {
+        logger.debug("Failed to broadcast instances update:", error);
+      }
+    }
+  }
+
   async function handleAddInstance(payload: {
     name: string | null;
     piholeUrl: string;
@@ -783,6 +796,9 @@ export default defineBackground(() => {
         return false;
       });
 
+      const config = await instanceManager.getInstances();
+      store.setActiveInstanceId(config.activeInstanceId);
+      await broadcastInstancesUpdated();
       return { success: true, data: instance };
     } catch (error) {
       logger.error("[Background] Error adding instance:", error);
@@ -821,6 +837,11 @@ export default defineBackground(() => {
         apiClientManager.configureClient(instance.id, instance.piholeUrl);
       }
 
+      if (store.getActiveInstanceId() === instance.id) {
+        await refreshInstanceStats(instance.id);
+      }
+
+      await broadcastInstancesUpdated();
       return { success: true, data: instance };
     } catch (error) {
       logger.error("[Background] Error updating instance:", error);
@@ -846,6 +867,9 @@ export default defineBackground(() => {
       apiClientManager.removeClient(instanceId);
       store.removeInstanceState(instanceId);
 
+      const config = await instanceManager.getInstances();
+      store.setActiveInstanceId(config.activeInstanceId);
+      await broadcastInstancesUpdated();
       return { success: true };
     } catch (error) {
       logger.error("[Background] Error deleting instance:", error);
@@ -869,6 +893,7 @@ export default defineBackground(() => {
         await refreshInstanceStats(instanceId);
       }
 
+      await broadcastInstancesUpdated();
       return { success: true };
     } catch (error) {
       logger.error("[Background] Error setting active instance:", error);

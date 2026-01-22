@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { logger } from "~/utils/logger";
 import type { ExtensionState } from "~/utils/types";
@@ -23,6 +23,7 @@ export function useExtensionState(): UseExtensionStateReturn {
   const [state, setState] = useState<ExtensionState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchState = useCallback(async () => {
     setIsLoading(true);
@@ -41,6 +42,21 @@ export function useExtensionState(): UseExtensionStateReturn {
     } catch (err) {
       logger.error("Failed to fetch extension state:", err);
       setError(err instanceof Error ? err.message : "Unknown error");
+
+      const errorMessage =
+        err instanceof Error ? err.message : String(err ?? "");
+      if (
+        errorMessage.includes("Could not establish connection") ||
+        errorMessage.includes("Receiving end does not exist") ||
+        errorMessage.includes("Extension context invalidated")
+      ) {
+        if (retryTimeoutRef.current === null) {
+          retryTimeoutRef.current = setTimeout(() => {
+            retryTimeoutRef.current = null;
+            fetchState();
+          }, 1000);
+        }
+      }
     } finally {
       setIsLoading(false);
     }
@@ -53,11 +69,19 @@ export function useExtensionState(): UseExtensionStateReturn {
     const handleMessage = (message: any) => {
       if (message.type === "STATE_UPDATED" && message.payload) {
         setState(message.payload);
+        setError(null);
+        setIsLoading(false);
       }
     };
 
     browser.runtime.onMessage.addListener(handleMessage);
-    return () => browser.runtime.onMessage.removeListener(handleMessage);
+    return () => {
+      browser.runtime.onMessage.removeListener(handleMessage);
+      if (retryTimeoutRef.current !== null) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+    };
   }, [fetchState]);
 
   return { state, isLoading, error, refetch: fetchState };

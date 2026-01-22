@@ -32,6 +32,7 @@ export type MessageType =
   | "HEALTH_CHECK"
   | "STATE_UPDATED"
   | "TAB_DOMAINS_UPDATED"
+  | "INSTANCES_UPDATED"
   // Multi-instance message types
   | "GET_INSTANCES"
   | "ADD_INSTANCE"
@@ -142,6 +143,7 @@ export type Message =
   | { type: "HEALTH_CHECK" }
   | { type: "STATE_UPDATED"; payload: Partial<ExtensionState> }
   | { type: "TAB_DOMAINS_UPDATED"; payload: SerializableTabDomains }
+  | { type: "INSTANCES_UPDATED" }
   // Multi-instance messages
   | { type: "GET_INSTANCES" }
   | { type: "ADD_INSTANCE"; payload: AddInstancePayload }

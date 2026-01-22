@@ -37,7 +37,7 @@ export function InstanceSelector({
     // Listen for state updates
     const handleMessage = (message: unknown) => {
       const msg = message as { type: string };
-      if (msg.type === "STATE_UPDATED") {
+      if (msg.type === "STATE_UPDATED" || msg.type === "INSTANCES_UPDATED") {
         loadInstances();
       }
     };
