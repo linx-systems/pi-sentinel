@@ -26,6 +26,12 @@ export class InstanceManager {
   private masterKeys: Map<string, string> = new Map();
 
   /**
+   * PERF-3: In-memory cache for instance config.
+   * Reduces storage I/O during frequent refreshes.
+   */
+  private instancesCache: PersistedInstances | null = null;
+
+  /**
    * Initialize the instance manager.
    * Performs migration if needed and loads master keys from session storage.
    */
@@ -36,6 +42,14 @@ export class InstanceManager {
 
       // Load any persisted master keys from session storage
       await this.loadMasterKeysFromSession();
+
+      // PERF-3: Set up storage change listener to invalidate cache
+      browser.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === "local" && changes[STORAGE_KEYS.INSTANCES]) {
+          this.instancesCache = null;
+          logger.debug("Instance cache invalidated due to storage change");
+        }
+      });
 
       logger.info("Instance manager initialized");
     } catch (error) {
@@ -49,23 +63,31 @@ export class InstanceManager {
 
   /**
    * Get all configured instances.
+   * PERF-3: Uses in-memory cache to reduce storage I/O.
    */
   async getInstances(): Promise<PersistedInstances> {
+    // PERF-3: Return cached value if available
+    if (this.instancesCache !== null) {
+      return this.instancesCache;
+    }
+
     const result = await browser.storage.local.get(STORAGE_KEYS.INSTANCES);
     const instances = result[STORAGE_KEYS.INSTANCES] as
       | PersistedInstances
       | undefined;
 
-    return (
-      instances || {
-        instances: [],
-        activeInstanceId: null,
-        globalSettings: {
-          notificationsEnabled: true,
-          refreshInterval: DEFAULTS.REFRESH_INTERVAL,
-        },
-      }
-    );
+    const config = instances || {
+      instances: [],
+      activeInstanceId: null,
+      globalSettings: {
+        notificationsEnabled: true,
+        refreshInterval: DEFAULTS.REFRESH_INTERVAL,
+      },
+    };
+
+    // PERF-3: Store in cache
+    this.instancesCache = config;
+    return config;
   }
 
   /**
@@ -112,6 +134,7 @@ export class InstanceManager {
       piholeUrl: piholeUrl.replace(/\/+$/, ""), // Normalize URL
       encryptedPassword,
       encryptedMasterKey,
+      passwordless: password.length === 0,
       rememberPassword,
       createdAt: Date.now(),
     };
@@ -177,6 +200,7 @@ export class InstanceManager {
         updates.password,
         masterKey,
       );
+      instance.passwordless = updates.password.length === 0;
 
       // Update encrypted master key based on rememberPassword setting
       const shouldRemember =
@@ -466,8 +490,12 @@ export class InstanceManager {
 
   /**
    * Save instances configuration to storage.
+   * PERF-3: Also updates the in-memory cache.
    */
   private async saveInstances(config: PersistedInstances): Promise<void> {
+    // PERF-3: Update cache before writing to storage
+    // This ensures the cache is immediately up-to-date
+    this.instancesCache = config;
     await browser.storage.local.set({ [STORAGE_KEYS.INSTANCES]: config });
   }
 

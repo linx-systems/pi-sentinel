@@ -601,6 +601,12 @@ body {
   padding: 24px;
 }
 
+.modal-description {
+  color: #9aa0b3;
+  font-size: 13px;
+  margin: 0 0 16px 0;
+}
+
 .modal-body .error-message {
   display: flex;
   align-items: center;
@@ -625,6 +631,10 @@ body {
 .modal-footer-right {
   display: flex;
   gap: 12px;
+}
+
+.password-modal {
+  max-width: 420px;
 }
 
 /* ===== Loading State ===== */

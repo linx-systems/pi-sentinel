@@ -42,8 +42,34 @@ class StateStore {
   // State change listeners
   private listeners: Set<StateListener> = new Set();
 
+  // BUG-1: Mutex for state updates to prevent race conditions
+  private updateLock: Promise<void> = Promise.resolve();
+
   constructor() {
     this.state = this.getInitialState();
+  }
+
+  /**
+   * BUG-1: Acquire lock for state updates.
+   * Ensures serialized access to state modifications.
+   */
+  private async withLock<T>(fn: () => T | Promise<T>): Promise<T> {
+    // Chain onto existing lock
+    const currentLock = this.updateLock;
+    let releaseLock: () => void;
+    this.updateLock = new Promise((resolve) => {
+      releaseLock = resolve;
+    });
+
+    try {
+      // Wait for previous operation to complete
+      await currentLock;
+      // Execute the function
+      return await fn();
+    } finally {
+      // Release lock for next operation
+      releaseLock!();
+    }
   }
 
   // ===== Legacy API (backwards compatibility) =====
@@ -105,20 +131,28 @@ class StateStore {
     this.state = { ...this.state, ...partial };
 
     // Also update active instance state if set
+    // BUG-2: Pass suppressBroadcast to prevent duplicate broadcasts
     if (this.activeInstanceId) {
-      this.updateInstanceState(this.activeInstanceId, {
-        isConnected: partial.isConnected,
-        connectionError: partial.connectionError,
-        blockingEnabled: partial.blockingEnabled,
-        blockingTimer: partial.blockingTimer,
-        stats: partial.stats,
-        statsLastUpdated: partial.statsLastUpdated,
-        totpRequired: partial.totpRequired,
-      });
+      this.updateInstanceState(
+        this.activeInstanceId,
+        {
+          isConnected: partial.isConnected,
+          connectionError: partial.connectionError,
+          blockingEnabled: partial.blockingEnabled,
+          blockingTimer: partial.blockingTimer,
+          stats: partial.stats,
+          statsLastUpdated: partial.statsLastUpdated,
+          totpRequired: partial.totpRequired,
+        },
+        { suppressBroadcast: true },
+      );
     }
 
     this.notifyListeners();
-    this.broadcastStateUpdate();
+    // BUG-5: Handle broadcast errors
+    this.broadcastStateUpdate().catch((error) => {
+      logger.debug("Failed to broadcast state update:", error);
+    });
   }
 
   /**
@@ -128,7 +162,10 @@ class StateStore {
     this.state = this.getInitialState();
     this.tabDomains.clear();
     this.notifyListeners();
-    this.broadcastStateUpdate();
+    // BUG-5: Handle broadcast errors
+    this.broadcastStateUpdate().catch((error) => {
+      logger.debug("Failed to broadcast state update:", error);
+    });
   }
 
   // ===== Multi-Instance State API =====
@@ -148,7 +185,10 @@ class StateStore {
     }
 
     this.notifyListeners();
-    this.broadcastStateUpdate();
+    // BUG-5: Handle broadcast errors
+    this.broadcastStateUpdate().catch((error) => {
+      logger.debug("Failed to broadcast state update:", error);
+    });
   }
 
   /**
@@ -167,10 +207,46 @@ class StateStore {
 
   /**
    * Update state for a specific instance.
+   * BUG-1: Uses lock to prevent race conditions during concurrent updates.
+   * BUG-2: suppressBroadcast parameter prevents duplicate broadcasts when called from setState().
    */
   updateInstanceState(
     instanceId: string,
     partial: Partial<Omit<InstanceState, "instanceId">>,
+    options?: { suppressBroadcast?: boolean },
+  ): void {
+    // BUG-1: Use lock to serialize state updates
+    // Note: We queue the update but don't await - callers can await updateInstanceStateAsync if needed
+    this.withLock(() => {
+      this.updateInstanceStateInternal(instanceId, partial, options);
+    }).catch((error) => {
+      // BUG-5: Handle any errors from the locked operation
+      logger.error("Error in updateInstanceState lock:", error);
+    });
+  }
+
+  /**
+   * Async version of updateInstanceState that can be awaited.
+   * Use this when you need to ensure the update completes before continuing.
+   */
+  async updateInstanceStateAsync(
+    instanceId: string,
+    partial: Partial<Omit<InstanceState, "instanceId">>,
+    options?: { suppressBroadcast?: boolean },
+  ): Promise<void> {
+    await this.withLock(() => {
+      this.updateInstanceStateInternal(instanceId, partial, options);
+    });
+  }
+
+  /**
+   * Internal implementation of instance state update.
+   * Must be called within withLock() to ensure thread safety.
+   */
+  private updateInstanceStateInternal(
+    instanceId: string,
+    partial: Partial<Omit<InstanceState, "instanceId">>,
+    options?: { suppressBroadcast?: boolean },
   ): void {
     let state = this.instanceStates.get(instanceId);
 
@@ -205,17 +281,28 @@ class StateStore {
       });
     }
 
+    // BUG-2: Skip broadcast if suppressed (to prevent duplicates from setState)
+    if (options?.suppressBroadcast) {
+      return;
+    }
+
     // If this is the active instance, also update legacy state
     if (instanceId === this.activeInstanceId) {
       this.state = this.instanceStateToExtensionState(
         this.instanceStates.get(instanceId)!,
       );
       this.notifyListeners();
-      this.broadcastStateUpdate();
+      // BUG-5: Handle broadcast errors
+      this.broadcastStateUpdate().catch((error) => {
+        logger.debug("Failed to broadcast state update:", error);
+      });
     } else if (this.activeInstanceId === null) {
       // In "All" mode, broadcast aggregated state when any instance updates
       this.notifyListeners();
-      this.broadcastStateUpdate();
+      // BUG-5: Handle broadcast errors
+      this.broadcastStateUpdate().catch((error) => {
+        logger.debug("Failed to broadcast state update:", error);
+      });
     }
   }
 
@@ -232,7 +319,10 @@ class StateStore {
     if (instanceId === this.activeInstanceId) {
       this.state = this.getInitialState();
       this.notifyListeners();
-      this.broadcastStateUpdate();
+      // BUG-5: Handle broadcast errors
+      this.broadcastStateUpdate().catch((error) => {
+        logger.debug("Failed to broadcast state update:", error);
+      });
     }
   }
 
@@ -247,7 +337,10 @@ class StateStore {
       this.activeInstanceId = null;
       this.state = this.getInitialState();
       this.notifyListeners();
-      this.broadcastStateUpdate();
+      // BUG-5: Handle broadcast errors
+      this.broadcastStateUpdate().catch((error) => {
+        logger.debug("Failed to broadcast state update:", error);
+      });
     }
   }
 
@@ -469,6 +562,12 @@ class StateStore {
   }
 
   /**
+   * PERF-2: Maximum domains to track per tab.
+   * Prevents unbounded memory growth in long sessions.
+   */
+  private static readonly MAX_DOMAINS_PER_TAB = 500;
+
+  /**
    * Add a domain to tab tracking.
    */
   addTabDomain(tabId: number, domain: string): void {
@@ -476,7 +575,23 @@ class StateStore {
     if (!data) return;
 
     // Check if domain is already tracked
-    const wasNew = !data.domains.has(domain);
+    if (data.domains.has(domain)) {
+      return; // Already tracked, no update needed
+    }
+
+    // PERF-2: Check if we've hit the limit
+    if (data.domains.size >= StateStore.MAX_DOMAINS_PER_TAB) {
+      // At limit - evict oldest domain (first item in Set iteration order)
+      const oldestDomain = data.domains.values().next().value;
+      if (oldestDomain && oldestDomain !== data.firstPartyDomain) {
+        data.domains.delete(oldestDomain);
+        data.thirdPartyDomains.delete(oldestDomain);
+      } else {
+        // Can't evict, just skip adding
+        return;
+      }
+    }
+
     data.domains.add(domain);
 
     // Check if third-party
@@ -487,10 +602,8 @@ class StateStore {
       data.thirdPartyDomains.add(domain);
     }
 
-    // Broadcast update if this was a new domain
-    if (wasNew) {
-      this.broadcastTabDomainsUpdate(tabId);
-    }
+    // Broadcast update
+    this.broadcastTabDomainsUpdate(tabId);
   }
 
   /**

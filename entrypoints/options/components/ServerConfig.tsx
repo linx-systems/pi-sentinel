@@ -58,7 +58,7 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
-    if (!url || !password) return;
+    if (!url) return;
 
     // Normalize URL
     let saveUrl = url.trim();
@@ -119,17 +119,17 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
         </div>
 
         <div class="form-group">
-          <label for="password">Web Interface Password</label>
+          <label for="password">Web Interface Password (optional)</label>
           <input
             type="password"
             id="password"
             value={password}
             onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
-            placeholder="Your Pi-hole password"
+            placeholder="Leave blank if none"
             disabled={isLoading}
           />
           <p class="hint">
-            The password you use to log into Pi-hole's web interface
+            Leave blank if your Pi-hole doesn't require a password.
           </p>
         </div>
 
@@ -147,8 +147,8 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
             <span class="checkbox-text">Remember Password</span>
           </label>
           <p class="hint">
-            Stay logged in across browser restarts. Your password is securely
-            encrypted.
+            Stay logged in across browser restarts. Password is encrypted but
+            stored locally. Disable on shared computers.
           </p>
         </div>
 
@@ -164,7 +164,7 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
           <button
             type="submit"
             class="btn btn-primary"
-            disabled={!url || !password || isLoading}
+            disabled={!url || isLoading}
           >
             {isLoading ? "Connecting..." : "Save & Connect"}
           </button>

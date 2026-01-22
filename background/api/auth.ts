@@ -11,6 +11,7 @@ import { logger } from "~/utils/logger";
 import { ErrorHandler, ErrorType } from "~/utils/error-handler";
 import type {
   EncryptedData,
+  EncryptedSessionData,
   PersistedConfig,
   SessionData,
 } from "~/utils/types";
@@ -28,6 +29,13 @@ export class AuthManager {
   private masterKey: string | null = null;
 
   /**
+   * SEC-3: Ephemeral key for encrypting session tokens.
+   * Generated on initialization and stored only in memory.
+   * This ensures session tokens in storage.session are encrypted.
+   */
+  private sessionEncryptionKey: string | null = null;
+
+  /**
    * Initialize the auth manager.
    * Attempts to restore session from storage, and auto-reauthenticate if "Remember Password" is enabled.
    *
@@ -38,6 +46,12 @@ export class AuthManager {
    */
   async initialize(): Promise<boolean> {
     try {
+      // SEC-3: Generate ephemeral session encryption key (memory-only)
+      // This key is used to encrypt session tokens in storage.session
+      // It's regenerated each browser session, so old encrypted sessions become invalid
+      this.sessionEncryptionKey = encryption.generateMasterPassword();
+      logger.debug("Session encryption key generated");
+
       const config = await this.getConfig();
 
       // Set base URL if configured
@@ -46,14 +60,9 @@ export class AuthManager {
         logger.info(`Pi-hole URL configured: ${config.piholeUrl}`);
       }
 
-      // Try to restore existing session
-      const session = await this.getSessionFromStorage();
-      if (session && session.expiresAt > Date.now()) {
-        apiClient.setSession(session.sid, session.csrf);
-        await this.startSessionKeepalive();
-        logger.info("Session restored from storage");
-        return true;
-      }
+      // Note: We can't restore encrypted sessions from previous browser sessions
+      // since the encryption key is ephemeral. This is by design for security.
+      // Sessions will be restored via auto-reauthentication if "Remember Password" is enabled.
 
       // Try to auto-login with stored credentials if "Remember Password" is enabled
       if (
@@ -385,7 +394,7 @@ export class AuthManager {
 
     // Try to re-authenticate
     const password = await this.getDecryptedPassword();
-    if (!password) {
+    if (password === null) {
       return false;
     }
 
@@ -400,7 +409,7 @@ export class AuthManager {
   private async tryAutoReauthenticate(): Promise<boolean> {
     try {
       const password = await this.getDecryptedPassword();
-      if (!password) {
+      if (password === null) {
         logger.debug("Cannot auto-reauthenticate: password decryption failed");
         return false;
       }
@@ -425,6 +434,7 @@ export class AuthManager {
 
   /**
    * Store session data in storage.session.
+   * SEC-3: Session tokens are encrypted with an ephemeral key.
    */
   private async storeSession(
     sid: string,
@@ -433,16 +443,73 @@ export class AuthManager {
   ): Promise<void> {
     const expiresAt = Date.now() + validity * 1000;
     const session: SessionData = { sid, csrf, expiresAt };
+
+    // SEC-3: Encrypt session tokens before storing
+    if (this.sessionEncryptionKey) {
+      try {
+        const encryptedSession = await encryption.encrypt(
+          JSON.stringify(session),
+          this.sessionEncryptionKey,
+        );
+        const storedData: EncryptedSessionData = {
+          encrypted: encryptedSession,
+          expiresAt, // Store expiry in clear for quick validity checks
+        };
+        await browser.storage.session.set({
+          [STORAGE_KEYS.SESSION]: storedData,
+        });
+        return;
+      } catch (error) {
+        logger.warn("Failed to encrypt session, storing unencrypted:", error);
+      }
+    }
+
+    // Fallback to unencrypted (should not happen in normal operation)
     await browser.storage.session.set({ [STORAGE_KEYS.SESSION]: session });
   }
 
   /**
    * Get session from storage.session.
+   * SEC-3: Decrypts session tokens if they were stored encrypted.
    */
   private async getSessionFromStorage(): Promise<SessionData | null> {
     const result = await browser.storage.session.get(STORAGE_KEYS.SESSION);
-    const session = result[STORAGE_KEYS.SESSION] as SessionData | undefined;
-    return session || null;
+    const storedData = result[STORAGE_KEYS.SESSION];
+
+    if (!storedData) {
+      return null;
+    }
+
+    // SEC-3: Check if data is encrypted (has 'encrypted' field)
+    if (
+      this.sessionEncryptionKey &&
+      storedData.encrypted &&
+      storedData.expiresAt
+    ) {
+      try {
+        // Quick expiry check before decryption
+        if (storedData.expiresAt < Date.now()) {
+          return null;
+        }
+
+        const decrypted = await encryption.decrypt(
+          storedData.encrypted,
+          this.sessionEncryptionKey,
+        );
+        return JSON.parse(decrypted) as SessionData;
+      } catch (error) {
+        // Decryption failed - session key may have changed (browser restart)
+        logger.debug("Failed to decrypt session:", error);
+        return null;
+      }
+    }
+
+    // Legacy unencrypted format (for backward compatibility during transition)
+    if (storedData.sid && storedData.csrf && storedData.expiresAt) {
+      return storedData as SessionData;
+    }
+
+    return null;
   }
 
   /**

@@ -2,6 +2,7 @@ import { useState, useEffect } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { InstanceCard } from "./InstanceCard";
 import { InstanceModal } from "./InstanceModal";
+import { PasswordPromptModal } from "./PasswordPromptModal";
 import { TotpInput } from "./TotpInput";
 import type {
   InstanceState,
@@ -35,6 +36,14 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   >(null);
   const [totpRequired, setTotpRequired] = useState(false);
   const [pendingPassword, setPendingPassword] = useState("");
+  const [passwordPromptInstance, setPasswordPromptInstance] =
+    useState<PiHoleInstance | null>(null);
+  const [passwordPromptError, setPasswordPromptError] = useState<string | null>(
+    null,
+  );
+  const [passwordPromptLoading, setPasswordPromptLoading] = useState(false);
+  const [useStoredPasswordForTotp, setUseStoredPasswordForTotp] =
+    useState(false);
 
   // Load instances on mount
   useEffect(() => {
@@ -153,76 +162,124 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   };
 
   const handleConnectInstance = async (instanceId: string) => {
-    setConnectingInstanceId(instanceId);
-    setTotpRequired(false);
-
-    // Prompt for password
-    const password = prompt("Enter your Pi-hole password:");
-    if (!password) {
-      setConnectingInstanceId(null);
+    const instance = instances.find((item) => item.id === instanceId);
+    if (!instance) {
+      onMessage({ type: "error", text: "Pi-hole not found" });
       return;
     }
 
-    setPendingPassword(password);
+    setConnectingInstanceId(instanceId);
+    setTotpRequired(false);
+    setPendingPassword("");
+    setUseStoredPasswordForTotp(false);
+    setPasswordPromptError(null);
+
+    if (instance.passwordless) {
+      await connectInstance({ instanceId, password: "" });
+      return;
+    }
+
+    if (instance.rememberPassword) {
+      setUseStoredPasswordForTotp(true);
+      await connectInstance({ instanceId });
+      return;
+    }
+
+    setPasswordPromptInstance(instance);
+  };
+
+  const connectInstance = async ({
+    instanceId,
+    password,
+    totp,
+    fromPrompt = false,
+  }: {
+    instanceId: string;
+    password?: string;
+    totp?: string;
+    fromPrompt?: boolean;
+  }): Promise<void> => {
+    let needsTotp = false;
+    if (fromPrompt) {
+      setPasswordPromptLoading(true);
+    }
 
     try {
+      const payload: { instanceId: string; password?: string; totp?: string } = {
+        instanceId,
+      };
+      if (password !== undefined) {
+        payload.password = password;
+      }
+      if (totp) {
+        payload.totp = totp;
+      }
+
       const response = await sendViaStorage<{ totpRequired?: boolean }>(
         "pendingConnectInstance",
         "connectInstanceResponse",
-        { instanceId, password },
-      );
-
-      if (response?.success) {
-        onMessage({ type: "success", text: "Connected to Pi-hole" });
-        await loadInstances();
-      } else if (response?.data?.totpRequired) {
-        setTotpRequired(true);
-        // Don't clear connectingInstanceId - we need it for TOTP submission
-      } else {
-        throw new Error(response?.error || "Connection failed");
-      }
-    } catch (err) {
-      logger.error("Failed to connect instance:", err);
-      onMessage({
-        type: "error",
-        text: err instanceof Error ? err.message : "Failed to connect",
-      });
-    }
-
-    if (!totpRequired) {
-      setConnectingInstanceId(null);
-    }
-  };
-
-  const handleTotpSubmit = async (totp: string): Promise<void> => {
-    if (!connectingInstanceId || !pendingPassword) return;
-
-    try {
-      const response = await sendViaStorage<void>(
-        "pendingConnectInstance",
-        "connectInstanceResponse",
-        {
-          instanceId: connectingInstanceId,
-          password: pendingPassword,
-          totp,
-        },
+        payload,
       );
 
       if (response?.success) {
         onMessage({ type: "success", text: "Connected to Pi-hole" });
         setTotpRequired(false);
-        setConnectingInstanceId(null);
         setPendingPassword("");
+        setPasswordPromptInstance(null);
+        setPasswordPromptError(null);
         await loadInstances();
+      } else if (response?.data?.totpRequired) {
+        needsTotp = true;
+        setTotpRequired(true);
+        setPendingPassword(password ?? "");
+        setUseStoredPasswordForTotp(password === undefined);
+        setPasswordPromptInstance(null);
+        setPasswordPromptError(null);
       } else {
-        throw new Error(response?.error || "Invalid TOTP code");
+        throw new Error(response?.error || "Connection failed");
       }
     } catch (err) {
-      onMessage({
-        type: "error",
-        text: err instanceof Error ? err.message : "Authentication failed",
-      });
+      logger.error("Failed to connect instance:", err);
+      const message =
+        err instanceof Error ? err.message : "Failed to connect";
+
+      if (fromPrompt) {
+        setPasswordPromptError(message);
+      } else {
+        onMessage({ type: "error", text: message });
+      }
+    } finally {
+      if (fromPrompt) {
+        setPasswordPromptLoading(false);
+      }
+      if (!needsTotp) {
+        setConnectingInstanceId(null);
+      }
     }
+  };
+
+  const handleTotpSubmit = async (
+    totp: string,
+    passwordFromInput: string,
+  ): Promise<void> => {
+    if (!connectingInstanceId) return;
+
+    const password = passwordFromInput ?? pendingPassword ?? undefined;
+
+    try {
+      await connectInstance({ instanceId: connectingInstanceId, password, totp });
+    } finally {
+      if (password === undefined && useStoredPasswordForTotp) {
+        setPendingPassword("");
+      }
+    }
+  };
+
+  const handlePasswordPromptClose = () => {
+    setPasswordPromptInstance(null);
+    setPasswordPromptError(null);
+    setPasswordPromptLoading(false);
+    setConnectingInstanceId(null);
   };
 
   const handleDisconnectInstance = async (instanceId: string) => {
@@ -292,12 +349,11 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   if (totpRequired && connectingInstanceId) {
     return (
       <TotpInput
-        onSubmit={async (totp: string, _password: string) => {
-          // Use the stored pendingPassword instead of the one from TotpInput
-          // since we already captured it during the initial connect attempt
-          await handleTotpSubmit(totp);
+        onSubmit={async (totp: string, password: string) => {
+          await handleTotpSubmit(totp, password);
         }}
         isLoading={false}
+        showPassword={false}
       />
     );
   }
@@ -352,6 +408,22 @@ export function InstanceList({ onMessage }: InstanceListProps) {
             setEditingInstance(null);
           }}
           onSaved={handleModalSaved}
+        />
+      )}
+
+      {passwordPromptInstance && (
+        <PasswordPromptModal
+          instance={passwordPromptInstance}
+          isLoading={passwordPromptLoading}
+          error={passwordPromptError}
+          onClose={handlePasswordPromptClose}
+          onSubmit={(password) =>
+            connectInstance({
+              instanceId: passwordPromptInstance.id,
+              password,
+              fromPrompt: true,
+            })
+          }
         />
       )}
     </div>

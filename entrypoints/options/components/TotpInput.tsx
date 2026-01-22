@@ -3,9 +3,10 @@ import {useEffect, useRef, useState} from 'preact/hooks';
 interface TotpInputProps {
     onSubmit: (totp: string, password: string) => Promise<void>;
     isLoading: boolean;
+    showPassword?: boolean;
 }
 
-export function TotpInput({onSubmit, isLoading}: TotpInputProps) {
+export function TotpInput({onSubmit, isLoading, showPassword = true}: TotpInputProps) {
     const [code, setCode] = useState('');
     const [password, setPassword] = useState('');
     const inputRef = useRef<HTMLInputElement>(null);
@@ -16,7 +17,7 @@ export function TotpInput({onSubmit, isLoading}: TotpInputProps) {
 
     const handleSubmit = async (e: Event) => {
         e.preventDefault();
-        if (code.length !== 6 || !password) return;
+        if (code.length !== 6 || (showPassword && !password)) return;
         await onSubmit(code, password);
     };
 
@@ -55,23 +56,25 @@ export function TotpInput({onSubmit, isLoading}: TotpInputProps) {
                     </div>
                 </div>
 
-                <div class="form-group" style={{marginTop: '16px'}}>
-                    <label for="totp-password">Password (for re-authentication)</label>
-                    <input
-                        type="password"
-                        id="totp-password"
-                        value={password}
-                        onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
-                        placeholder="Your Pi-hole password"
-                        disabled={isLoading}
-                    />
-                </div>
+                {showPassword && (
+                    <div class="form-group" style={{marginTop: '16px'}}>
+                        <label for="totp-password">Password (for re-authentication)</label>
+                        <input
+                            type="password"
+                            id="totp-password"
+                            value={password}
+                            onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
+                            placeholder="Your Pi-hole password"
+                            disabled={isLoading}
+                        />
+                    </div>
+                )}
 
                 <div class="btn-group">
                     <button
                         type="submit"
                         class="btn btn-primary"
-                        disabled={code.length !== 6 || !password || isLoading}
+                        disabled={code.length !== 6 || (showPassword && !password) || isLoading}
                     >
                         {isLoading ? 'Verifying...' : 'Verify'}
                     </button>

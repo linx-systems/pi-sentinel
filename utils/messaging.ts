@@ -104,7 +104,7 @@ export interface SetActiveInstancePayload {
 
 export interface ConnectInstancePayload {
   instanceId: string;
-  password: string;
+  password?: string;
   totp?: string;
 }
 

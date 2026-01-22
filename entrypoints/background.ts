@@ -3,6 +3,7 @@ import { defineBackground } from "#imports";
 import { apiClient, apiClientManager } from "~/background/api/client";
 import { authManager } from "~/background/api/auth";
 import { instanceManager } from "~/background/api/instance-manager";
+import { encryption } from "~/background/crypto/encryption";
 import { store } from "~/background/state/store";
 import { badgeService } from "~/background/services/badge";
 import { notificationService } from "~/background/services/notifications";
@@ -16,7 +17,12 @@ import {
 import { logger } from "~/utils/logger";
 import { ErrorHandler, ErrorType } from "~/utils/error-handler";
 import type { Message, MessageResponse } from "~/utils/messaging";
-import type { ExtensionState, QueryEntry, SessionData } from "~/utils/types";
+import type {
+  EncryptedSessionData,
+  ExtensionState,
+  QueryEntry,
+  SessionData,
+} from "~/utils/types";
 
 export default defineBackground(() => {
   /**
@@ -52,11 +58,132 @@ export default defineBackground(() => {
     });
   });
 
+  /**
+   * SEC-3: Ephemeral key for encrypting instance session tokens.
+   * Generated on initialization, stored only in memory.
+   */
+  let instanceSessionEncryptionKey: string | null = null;
+
+  /**
+   * BUG-4: Flag to prevent stats refresh during instance switch.
+   * Set of instance IDs currently being transitioned.
+   */
+  const instancesInTransition: Set<string> = new Set();
+
+  type ConnectionErrorInfo = {
+    key?: string;
+    message?: string;
+    status?: number;
+    hint?: string;
+  };
+
+  const formatConnectionError = (
+    error?: ConnectionErrorInfo,
+    fallback = "Couldn't connect. Try again?",
+  ): string => {
+    if (!error) return fallback;
+
+    const message = error.message || "";
+    const lower = message.toLowerCase();
+
+    if (
+      error.key === "auth_failed" ||
+      error.status === 401 ||
+      error.status === 403 ||
+      lower.includes("authentication") ||
+      lower.includes("password")
+    ) {
+      return "Login failed — check the password (or leave it blank if this Pi-hole has no password).";
+    }
+
+    if (error.key === "totp_required") {
+      return "This one needs a 2FA code.";
+    }
+
+    if (error.key === "timeout" || lower.includes("timed out")) {
+      return "Timed out talking to the host. Is it online?";
+    }
+
+    if (
+      error.key === "cert_error" ||
+      lower.includes("certificate") ||
+      lower.includes("ssl")
+    ) {
+      return "SSL cert issue. Open the Pi-hole URL in your browser, accept the cert, then try again.";
+    }
+
+    if (
+      error.key === "network_error" ||
+      lower.includes("failed to fetch") ||
+      lower.includes("network")
+    ) {
+      return "Can't reach the host. Check the URL and that the Pi-hole is online.";
+    }
+
+    if (error.key === "not_configured") {
+      return "Missing host URL. Add it and try again.";
+    }
+
+    if (error.key === "connection_failed") {
+      return "The host answered, but the connection didn't work. Check the URL and try again.";
+    }
+
+    if (error.status && error.status >= 500) {
+      return "The Pi-hole is responding, but it looks unhappy (server error). Try again in a bit.";
+    }
+
+    if (error.status && error.status >= 400) {
+      return "The host rejected the request. Double-check the URL and settings.";
+    }
+
+    if (message) {
+      return `Something else went wrong: ${message}`;
+    }
+
+    return fallback;
+  };
+
+  const formatAuthError = (message?: string | null): string => {
+    if (!message) {
+      return "Login failed. Try again?";
+    }
+    const lower = message.toLowerCase();
+
+    if (
+      lower.includes("authentication") ||
+      lower.includes("password") ||
+      lower.includes("unauthorized") ||
+      lower.includes("401") ||
+      lower.includes("403")
+    ) {
+      return "Login failed — check the password (or leave it blank if this Pi-hole has no password).";
+    }
+
+    if (lower.includes("certificate") || lower.includes("ssl")) {
+      return "SSL cert issue. Open the Pi-hole URL in your browser, accept the cert, then try again.";
+    }
+
+    if (
+      lower.includes("timed out") ||
+      lower.includes("timeout") ||
+      lower.includes("failed to fetch") ||
+      lower.includes("network")
+    ) {
+      return "Can't reach the host. Check the URL and that the Pi-hole is online.";
+    }
+
+    return `Something else went wrong: ${message}`;
+  };
+
   // ===== Initialization =====
 
   async function initialize(): Promise<void> {
     try {
       logger.info("[PiSentinel] Starting background script initialization");
+
+      // SEC-3: Generate ephemeral session encryption key (memory-only)
+      instanceSessionEncryptionKey = encryption.generateMasterPassword();
+      logger.debug("[PiSentinel] Instance session encryption key generated");
 
       // Initialize services
       logger.info("[PiSentinel] Initializing notification service");
@@ -73,7 +200,7 @@ export default defineBackground(() => {
       logger.info("[PiSentinel] Setting up auth handler");
       apiClient.setAuthRequiredHandler(async () => {
         const password = await authManager.getDecryptedPassword();
-        if (password) {
+        if (password !== null) {
           const result = await authManager.authenticate(password);
           return result.success;
         }
@@ -85,6 +212,8 @@ export default defineBackground(() => {
       await initializeInstances();
 
       // Subscribe to state changes for badge updates
+      // BUG-6: This subscription is intentionally long-lived (extension lifetime).
+      // No cleanup needed since background script runs continuously.
       logger.info("[PiSentinel] Setting up state subscription");
       store.subscribe((state) => {
         badgeService.update(state);
@@ -138,17 +267,15 @@ export default defineBackground(() => {
           const password = await instanceManager.getDecryptedPassword(
             instance.id,
           );
-          if (password) {
+          if (password !== null) {
             const result = await client.authenticate(password);
             return result.success;
           }
           return false;
         });
 
-        // Try to restore session from storage
-        const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instance.id}`;
-        const sessionResult = await browser.storage.session.get(sessionKey);
-        const session = sessionResult[sessionKey] as SessionData | undefined;
+        // Try to restore session from storage (SEC-3: uses encrypted storage)
+        const session = await getInstanceSession(instance.id);
 
         if (session && session.expiresAt > Date.now()) {
           client.setSession(session.sid, session.csrf);
@@ -161,7 +288,7 @@ export default defineBackground(() => {
           const password = await instanceManager.getDecryptedPassword(
             instance.id,
           );
-          if (password) {
+          if (password !== null) {
             const result = await client.authenticate(password);
             if (result.success && result.data?.session) {
               // Store session
@@ -201,6 +328,7 @@ export default defineBackground(() => {
 
   /**
    * Store session for a specific instance.
+   * SEC-3: Session tokens are encrypted with an ephemeral key.
    */
   async function storeInstanceSession(
     instanceId: string,
@@ -211,7 +339,77 @@ export default defineBackground(() => {
     const expiresAt = Date.now() + validity * 1000;
     const session: SessionData = { sid, csrf, expiresAt };
     const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
+
+    // SEC-3: Encrypt session tokens before storing
+    if (instanceSessionEncryptionKey) {
+      try {
+        const encryptedSession = await encryption.encrypt(
+          JSON.stringify(session),
+          instanceSessionEncryptionKey,
+        );
+        const storedData: EncryptedSessionData = {
+          encrypted: encryptedSession,
+          expiresAt, // Store expiry in clear for quick validity checks
+        };
+        await browser.storage.session.set({ [sessionKey]: storedData });
+        return;
+      } catch (error) {
+        logger.warn(
+          "[PiSentinel] Failed to encrypt instance session, storing unencrypted:",
+          error,
+        );
+      }
+    }
+
+    // Fallback to unencrypted (should not happen in normal operation)
     await browser.storage.session.set({ [sessionKey]: session });
+  }
+
+  /**
+   * Get session for a specific instance.
+   * SEC-3: Decrypts session tokens if they were stored encrypted.
+   */
+  async function getInstanceSession(
+    instanceId: string,
+  ): Promise<SessionData | null> {
+    const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
+    const result = await browser.storage.session.get(sessionKey);
+    const storedData = result[sessionKey];
+
+    if (!storedData) {
+      return null;
+    }
+
+    // SEC-3: Check if data is encrypted (has 'encrypted' field)
+    if (
+      instanceSessionEncryptionKey &&
+      storedData.encrypted &&
+      storedData.expiresAt
+    ) {
+      try {
+        // Quick expiry check before decryption
+        if (storedData.expiresAt < Date.now()) {
+          return null;
+        }
+
+        const decrypted = await encryption.decrypt(
+          storedData.encrypted,
+          instanceSessionEncryptionKey,
+        );
+        return JSON.parse(decrypted) as SessionData;
+      } catch (error) {
+        // Decryption failed - session key may have changed (browser restart)
+        logger.debug("[PiSentinel] Failed to decrypt instance session:", error);
+        return null;
+      }
+    }
+
+    // Legacy unencrypted format (for backward compatibility during transition)
+    if (storedData.sid && storedData.csrf && storedData.expiresAt) {
+      return storedData as SessionData;
+    }
+
+    return null;
   }
 
   /**
@@ -293,6 +491,15 @@ export default defineBackground(() => {
     message: Message,
     sender: browser.Runtime.MessageSender,
   ): Promise<MessageResponse<unknown>> {
+    // SEC-2: Validate message origin to prevent spoofed messages from other extensions
+    if (sender.id !== browser.runtime.id) {
+      logger.warn(
+        "[Background] Rejected message from unauthorized sender:",
+        sender.id,
+      );
+      return { success: false, error: "Unauthorized" };
+    }
+
     logger.debug("[Background] handleMessage called with type:", message.type);
 
     const handler = messageHandlers[message.type];
@@ -353,9 +560,9 @@ export default defineBackground(() => {
 
     store.setState({
       isConnected: false,
-      connectionError: result.error || null,
+      connectionError: formatAuthError(result.error),
     });
-    return { success: false, error: result.error };
+    return { success: false, error: formatAuthError(result.error) };
   }
 
   async function handleLogout(): Promise<MessageResponse<void>> {
@@ -489,9 +696,7 @@ export default defineBackground(() => {
       : { success: false, error: result.error?.message };
   }
 
-  async function handleSearchDomain(
-    domain: string,
-  ): Promise<
+  async function handleSearchDomain(domain: string): Promise<
     MessageResponse<{
       gravity: boolean;
       allowlist: boolean;
@@ -733,7 +938,7 @@ export default defineBackground(() => {
     const result = await apiClient.testConnection(url);
     return result.success
       ? { success: true }
-      : { success: false, error: result.error?.message };
+      : { success: false, error: formatConnectionError(result.error) };
   }
 
   // ===== Multi-Instance Handlers =====
@@ -789,7 +994,7 @@ export default defineBackground(() => {
         const password = await instanceManager.getDecryptedPassword(
           instance.id,
         );
-        if (password) {
+        if (password !== null) {
           const result = await client.authenticate(password);
           return result.success;
         }
@@ -884,7 +1089,20 @@ export default defineBackground(() => {
   async function handleSetActiveInstance(
     instanceId: string | null,
   ): Promise<MessageResponse<void>> {
+    // BUG-4: Mark instances as transitioning to prevent concurrent refresh
+    const transitionIds: string[] = [];
     try {
+      if (instanceId === null) {
+        const config = await instanceManager.getInstances();
+        config.instances.forEach((i) => {
+          instancesInTransition.add(i.id);
+          transitionIds.push(i.id);
+        });
+      } else {
+        instancesInTransition.add(instanceId);
+        transitionIds.push(instanceId);
+      }
+
       await instanceManager.setActiveInstance(instanceId);
       store.setActiveInstanceId(instanceId);
 
@@ -916,6 +1134,9 @@ export default defineBackground(() => {
             ? error.message
             : "Failed to set active instance",
       };
+    } finally {
+      // BUG-4: Clear transition flags
+      transitionIds.forEach((id) => instancesInTransition.delete(id));
     }
   }
 
@@ -927,7 +1148,7 @@ export default defineBackground(() => {
       }
 
       const password = await instanceManager.getDecryptedPassword(instanceId);
-      if (!password) {
+      if (password === null) {
         return;
       }
 
@@ -942,7 +1163,7 @@ export default defineBackground(() => {
 
   async function handleConnectInstance(payload: {
     instanceId: string;
-    password: string;
+    password?: string;
     totp?: string;
   }): Promise<MessageResponse<{ totpRequired?: boolean }>> {
     try {
@@ -957,8 +1178,24 @@ export default defineBackground(() => {
         instance.piholeUrl,
       );
 
+      const password =
+        payload.password !== undefined
+          ? payload.password
+          : await instanceManager.getDecryptedPassword(instance.id);
+
+      if (password === null) {
+        const errorMessage =
+          "No saved password for this one. Edit it to add one (or leave it blank if it doesn't need one).";
+        store.updateInstanceState(instance.id, {
+          isConnected: false,
+          connectionError: errorMessage,
+          totpRequired: false,
+        });
+        return { success: false, error: errorMessage };
+      }
+
       // Authenticate
-      const result = await client.authenticate(payload.password, payload.totp);
+      const result = await client.authenticate(password, payload.totp);
 
       if (!result.success) {
         // Check if TOTP is required
@@ -973,11 +1210,12 @@ export default defineBackground(() => {
             error: "TOTP required",
           };
         }
+        const errorMessage = formatConnectionError(result.error);
         store.updateInstanceState(instance.id, {
           isConnected: false,
-          connectionError: result.error?.message || "Authentication failed",
+          connectionError: errorMessage,
         });
-        return { success: false, error: result.error?.message };
+        return { success: false, error: errorMessage };
       }
 
       if (result.data?.session) {
@@ -1152,7 +1390,7 @@ export default defineBackground(() => {
       const sessionValid = await authManager.handleKeepalive();
       if (!sessionValid) {
         const password = await authManager.getDecryptedPassword();
-        if (password) {
+        if (password !== null) {
           const result = await authManager.authenticate(password);
           if (result.success) {
             store.setState({ isConnected: true });
@@ -1168,17 +1406,21 @@ export default defineBackground(() => {
     // Iterate through all instances
     for (const instance of config.instances) {
       try {
-        const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instance.id}`;
-        const sessionResult = await browser.storage.session.get(sessionKey);
-        const session = sessionResult[sessionKey] as SessionData | undefined;
+        // SEC-3: Use encrypted session retrieval
+        const session = await getInstanceSession(instance.id);
 
         if (!session) continue;
 
-        // Check if session is about to expire (within 60 seconds)
+        const client = apiClientManager.getClient(instance.id);
+
+        // BUG-3: Check if session is about to expire (within threshold)
+        // Use a longer threshold to account for slow network conditions
         const timeUntilExpiry = session.expiresAt - Date.now();
-        if (timeUntilExpiry > DEFAULTS.SESSION_RENEWAL_THRESHOLD * 1000) {
-          // Session still valid, just ping to extend
-          const client = apiClientManager.getClient(instance.id);
+        const SAFE_THRESHOLD_MS = DEFAULTS.SESSION_RENEWAL_THRESHOLD * 1000;
+        const AGGRESSIVE_THRESHOLD_MS = SAFE_THRESHOLD_MS * 2; // 2x threshold for safety margin
+
+        if (timeUntilExpiry > AGGRESSIVE_THRESHOLD_MS) {
+          // Session still valid with good margin, just ping to extend
           const result = await client.getStats();
           if (result.success) {
             // Update session expiry
@@ -1188,16 +1430,26 @@ export default defineBackground(() => {
               session.csrf,
               300,
             );
+            continue;
           }
-          continue;
+
+          // BUG-3: If ping failed (possibly expired during call), try to re-authenticate
+          if (result.error?.status === 401 || result.error?.status === 403) {
+            logger.debug(
+              `[PiSentinel] Session ping failed for ${instance.id}, attempting re-auth`,
+            );
+            // Fall through to re-authentication below
+          } else {
+            // Network error or other issue - keep trying
+            continue;
+          }
         }
 
-        // Session about to expire, try to re-authenticate
+        // Session about to expire or ping failed - proactively re-authenticate
         const password = await instanceManager.getDecryptedPassword(
           instance.id,
         );
-        if (password) {
-          const client = apiClientManager.getClient(instance.id);
+        if (password !== null) {
           const result = await client.authenticate(password);
           if (result.success && result.data?.session) {
             await storeInstanceSession(
@@ -1239,13 +1491,31 @@ export default defineBackground(() => {
       return;
     }
 
-    // Refresh stats for all connected instances
-    for (const instance of config.instances) {
-      const state = store.getInstanceState(instance.id);
-      if (state?.isConnected) {
-        await refreshInstanceStats(instance.id);
-      }
-    }
+    // PERF-1: Refresh stats for all connected instances in parallel
+    const refreshPromises = config.instances
+      .filter((instance) => {
+        // BUG-4: Skip instances that are currently being transitioned
+        if (instancesInTransition.has(instance.id)) {
+          logger.debug(
+            `[PiSentinel] Skipping refresh for ${instance.id} - in transition`,
+          );
+          return false;
+        }
+
+        const state = store.getInstanceState(instance.id);
+        return state?.isConnected;
+      })
+      .map((instance) =>
+        refreshInstanceStats(instance.id).catch((error) => {
+          // Log but don't fail other refreshes
+          logger.error(
+            `[PiSentinel] Stats refresh failed for ${instance.id}:`,
+            error,
+          );
+        }),
+      );
+
+    await Promise.all(refreshPromises);
   }
 
   // ===== Event Listeners =====

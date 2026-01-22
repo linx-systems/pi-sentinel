@@ -109,6 +109,17 @@ export interface SessionData {
   expiresAt: number;
 }
 
+/**
+ * SEC-3: Encrypted session data stored in storage.session.
+ * The actual session tokens are encrypted with an ephemeral key.
+ */
+export interface EncryptedSessionData {
+  /** Encrypted session data (sid, csrf, expiresAt as JSON) */
+  encrypted: EncryptedData;
+  /** Expiry time stored in clear for quick validity checks without decryption */
+  expiresAt: number;
+}
+
 // ===== Multi Pi-hole Instance Types =====
 
 /**
@@ -124,6 +135,8 @@ export interface PiHoleInstance {
   piholeUrl: string;
   /** Encrypted Pi-hole password */
   encryptedPassword: EncryptedData | null;
+  /** Whether this instance has no password */
+  passwordless?: boolean;
   /** Encrypted master key for persistent re-authentication */
   encryptedMasterKey: EncryptedData | null;
   /** Whether to persist credentials across browser restarts */

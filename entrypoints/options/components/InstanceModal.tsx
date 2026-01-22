@@ -19,6 +19,7 @@ export function InstanceModal({
   const [name, setName] = useState(instance?.name || "");
   const [url, setUrl] = useState(instance?.piholeUrl || "");
   const [password, setPassword] = useState("");
+  const [noPassword, setNoPassword] = useState(instance?.passwordless ?? false);
   const [rememberPassword, setRememberPassword] = useState(
     instance?.rememberPassword ?? false,
   );
@@ -27,6 +28,12 @@ export function InstanceModal({
   const [testStatus, setTestStatus] = useState<
     "idle" | "testing" | "success" | "error"
   >("idle");
+
+  useEffect(() => {
+    if (noPassword && rememberPassword) {
+      setRememberPassword(false);
+    }
+  }, [noPassword, rememberPassword]);
 
   // Close modal on escape key
   useEffect(() => {
@@ -84,6 +91,11 @@ export function InstanceModal({
 
       if (isEditMode) {
         // Update existing instance
+        const passwordToSend = noPassword
+          ? ""
+          : password.length > 0
+            ? password
+            : undefined;
         const response = await sendViaStorage<unknown>(
           "pendingUpdateInstance",
           "updateInstanceResponse",
@@ -91,7 +103,7 @@ export function InstanceModal({
             instanceId: instance.id,
             name: name || null,
             piholeUrl: saveUrl,
-            password: password || undefined, // Only send if provided
+            password: passwordToSend, // Only send if provided or cleared
             rememberPassword,
           },
         );
@@ -101,17 +113,14 @@ export function InstanceModal({
         }
       } else {
         // Add new instance
-        if (!password) {
-          throw new Error("Password is required for new instances");
-        }
-
+        const passwordToSend = noPassword ? "" : password;
         const response = await sendViaStorage<unknown>(
           "pendingAddInstance",
           "addInstanceResponse",
           {
             name: name || null,
             piholeUrl: saveUrl,
-            password,
+            password: passwordToSend,
             rememberPassword,
           },
         );
@@ -207,6 +216,31 @@ export function InstanceModal({
             </div>
 
             <div class="form-group">
+              <label class="checkbox-label">
+                <input
+                  type="checkbox"
+                  id="instance-no-password"
+                  checked={noPassword}
+                  onChange={(e) => {
+                    const checked = (e.target as HTMLInputElement).checked;
+                    setNoPassword(checked);
+                    if (checked) {
+                      setPassword("");
+                      setRememberPassword(false);
+                    }
+                  }}
+                  disabled={isLoading}
+                />
+                <span class="checkbox-text">No password required</span>
+              </label>
+              <p class="hint">
+                {isEditMode
+                  ? "Use this to clear the stored password for this instance."
+                  : "Enable this if your Pi-hole does not require a password."}
+              </p>
+            </div>
+
+            <div class="form-group">
               <label for="instance-password">
                 Web Interface Password
                 {isEditMode && " (leave blank to keep current)"}
@@ -219,11 +253,15 @@ export function InstanceModal({
                   setPassword((e.target as HTMLInputElement).value)
                 }
                 placeholder={
-                  isEditMode ? "Enter new password" : "Your Pi-hole password"
+                  isEditMode ? "Enter new password" : "Leave blank if none"
                 }
-                disabled={isLoading}
-                required={!isEditMode}
+                disabled={isLoading || noPassword}
               />
+              <p class="hint">
+                {isEditMode
+                  ? "Leave blank to keep the current password. If this Pi-hole has no password, leaving it blank is fine."
+                  : "Leave blank if this Pi-hole doesn't require a password."}
+              </p>
             </div>
 
             <div class="form-group">
@@ -235,13 +273,13 @@ export function InstanceModal({
                   onChange={(e) =>
                     setRememberPassword((e.target as HTMLInputElement).checked)
                   }
-                  disabled={isLoading}
+                  disabled={isLoading || noPassword}
                 />
                 <span class="checkbox-text">Remember Password</span>
               </label>
               <p class="hint">
-                Stay logged in across browser restarts. Your password is
-                securely encrypted.
+                Stay logged in across browser restarts. Password is encrypted
+                but stored locally. Disable on shared computers.
               </p>
             </div>
           </div>
@@ -267,7 +305,7 @@ export function InstanceModal({
               <button
                 type="submit"
                 class="btn btn-primary"
-                disabled={!url || (!password && !isEditMode) || isLoading}
+                disabled={!url || isLoading}
               >
                 {isLoading
                   ? "Saving..."
