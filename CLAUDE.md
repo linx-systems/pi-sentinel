@@ -77,6 +77,16 @@ background script**:
 - `ADD_TO_LIST`: Add domain to allowlist/denylist
 - `GET_QUERIES`: Fetch query log
 
+### Multi-Instance Notes (Recent Findings)
+
+- Instance config lives in `browser.storage.local` under `STORAGE_KEYS.INSTANCES`.
+- Background broadcasts `INSTANCES_UPDATED` after add/update/delete/active changes.
+- `InstanceSelector` listens to both `STATE_UPDATED` and `INSTANCES_UPDATED`.
+- Popup derives the Admin link from the active instance (or the only instance).
+- Avoid stat refresh loops: only refresh when stats are stale (cache TTL).
+- Options pages use storage-based messaging (`utils/storage-message.ts`) because
+  `runtime.sendMessage` responses can be unreliable in Firefox options pages.
+
 ### State Management
 
 **Central State Store** (`src/background/state/store.ts`):
