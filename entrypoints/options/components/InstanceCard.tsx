@@ -32,6 +32,7 @@ export function InstanceCard({
           <span class="instance-url">{instance.piholeUrl}</span>
         </div>
         <div class="instance-status">
+          {isActive && <span class="active-indicator">Active</span>}
           <span
             class={`status-badge ${isConnected ? "connected" : "disconnected"}`}
           >
@@ -115,7 +116,6 @@ export function InstanceCard({
         </button>
       </div>
 
-      {isActive && <div class="active-indicator">Active</div>}
     </div>
   );
 }

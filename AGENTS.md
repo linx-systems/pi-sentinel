@@ -10,8 +10,10 @@ Notes for agents working in this repo (recent findings).
   and hidden in "All" mode when multiple instances exist.
 - Avoid refresh loops in the popup: only fetch stats/blocking status when cached
   data is stale (use `DEFAULTS.CACHE_TTL` as the threshold).
+- Instance selector "All" option is now shown whenever 2+ instances are
+  configured (not based on connected count) and auto-connects on selection if a
+  stored password exists.
 - Options pages use storage-based messaging (`utils/storage-message.ts`) due to
   unreliable `runtime.sendMessage` responses in Firefox options pages.
 - `useExtensionState` retries `GET_STATE` on transient "background unreachable"
   errors and clears errors when a `STATE_UPDATED` message arrives.
-

@@ -403,8 +403,13 @@ body {
 }
 
 .instance-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
   margin-left: 12px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .status-badge {
@@ -481,9 +486,8 @@ body {
 }
 
 .active-indicator {
-  position: absolute;
-  top: 12px;
-  right: 12px;
+  display: inline-flex;
+  align-items: center;
   background: #3b82f6;
   color: #fff;
   font-size: 10px;

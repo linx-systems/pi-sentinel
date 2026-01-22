@@ -888,9 +888,21 @@ export default defineBackground(() => {
       await instanceManager.setActiveInstance(instanceId);
       store.setActiveInstanceId(instanceId);
 
-      // If switching to a specific instance, refresh its stats if cache expired
-      if (instanceId && !store.isCacheValid(instanceId)) {
-        await refreshInstanceStats(instanceId);
+      if (instanceId === null) {
+        const config = await instanceManager.getInstances();
+        for (const instance of config.instances) {
+          await tryAutoConnect(instance.id);
+        }
+      } else {
+        await tryAutoConnect(instanceId);
+
+        // If switching to a specific instance, refresh its stats if cache expired
+        if (
+          store.getInstanceState(instanceId)?.isConnected &&
+          !store.isCacheValid(instanceId)
+        ) {
+          await refreshInstanceStats(instanceId);
+        }
       }
 
       await broadcastInstancesUpdated();
@@ -904,6 +916,27 @@ export default defineBackground(() => {
             ? error.message
             : "Failed to set active instance",
       };
+    }
+  }
+
+  async function tryAutoConnect(instanceId: string): Promise<void> {
+    try {
+      const currentState = store.getInstanceState(instanceId);
+      if (currentState?.isConnected) {
+        return;
+      }
+
+      const password = await instanceManager.getDecryptedPassword(instanceId);
+      if (!password) {
+        return;
+      }
+
+      const response = await handleConnectInstance({ instanceId, password });
+      if (!response.success) {
+        logger.debug("[Background] Auto-connect failed:", response.error);
+      }
+    } catch (error) {
+      logger.debug("[Background] Auto-connect error:", error);
     }
   }
 

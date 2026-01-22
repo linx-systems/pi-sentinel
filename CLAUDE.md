@@ -82,6 +82,8 @@ background script**:
 - Instance config lives in `browser.storage.local` under `STORAGE_KEYS.INSTANCES`.
 - Background broadcasts `INSTANCES_UPDATED` after add/update/delete/active changes.
 - `InstanceSelector` listens to both `STATE_UPDATED` and `INSTANCES_UPDATED`.
+- Instance selector shows "All" when 2+ instances are configured and will
+  attempt auto-connect on selection if a stored password exists.
 - Popup derives the Admin link from the active instance (or the only instance).
 - Avoid stat refresh loops: only refresh when stats are stale (cache TTL).
 - Options pages use storage-based messaging (`utils/storage-message.ts`) because

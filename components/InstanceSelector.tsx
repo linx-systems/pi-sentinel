@@ -132,8 +132,9 @@ export function InstanceSelector({
   const activeInstance = instances.find(
     (i) => i.instance.id === activeInstanceId,
   );
+  const totalCount = instances.length;
   const connectedCount = instances.filter((i) => i.state?.isConnected).length;
-  const showAllOption = connectedCount > 1;
+  const showAllOption = totalCount > 1;
 
   const getDisplayName = (instance: PiHoleInstance): string => {
     if (instance.name) return instance.name;
@@ -147,7 +148,7 @@ export function InstanceSelector({
 
   const currentLabel =
     activeInstanceId === null
-      ? `All Pi-holes (${connectedCount})`
+      ? `All Pi-holes (${connectedCount}/${totalCount})`
       : activeInstance
         ? getDisplayName(activeInstance.instance)
         : "Select Pi-hole";
@@ -177,7 +178,9 @@ export function InstanceSelector({
                 <AllIcon />
               </span>
               <span class="option-label">All Pi-holes</span>
-              <span class="option-count">{connectedCount} connected</span>
+              <span class="option-count">
+                {connectedCount}/{totalCount} connected
+              </span>
             </button>
           )}
 
