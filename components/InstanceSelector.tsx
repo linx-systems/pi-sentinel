@@ -29,22 +29,36 @@ export function InstanceSelector({
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const isSelectingRef = useRef(false);
+  const loadDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load instances on mount
   useEffect(() => {
     loadInstances();
 
-    // Listen for state updates
+    // Listen for instance updates only (not STATE_UPDATED to avoid message storm)
+    // STATE_UPDATED fires multiple times during instance switching; INSTANCES_UPDATED
+    // is the authoritative signal that instance config has changed.
     const handleMessage = (message: unknown) => {
       const msg = message as { type: string };
-      if (msg.type === "STATE_UPDATED" || msg.type === "INSTANCES_UPDATED") {
-        loadInstances();
+      if (msg.type === "INSTANCES_UPDATED") {
+        // Debounce to prevent rapid-fire calls during instance switching
+        if (loadDebounceRef.current) {
+          clearTimeout(loadDebounceRef.current);
+        }
+        loadDebounceRef.current = setTimeout(() => {
+          loadDebounceRef.current = null;
+          loadInstances();
+        }, 100);
       }
     };
     browser.runtime.onMessage.addListener(handleMessage);
 
     return () => {
       browser.runtime.onMessage.removeListener(handleMessage);
+      if (loadDebounceRef.current) {
+        clearTimeout(loadDebounceRef.current);
+      }
     };
   }, []);
 
@@ -108,6 +122,17 @@ export function InstanceSelector({
   };
 
   const handleSelectInstance = async (instanceId: string | null) => {
+    // Guard against concurrent calls (e.g., double-clicks or re-renders during async)
+    if (isSelectingRef.current) {
+      return;
+    }
+    // Skip if already on this instance
+    if (instanceId === activeInstanceId) {
+      setIsOpen(false);
+      return;
+    }
+
+    isSelectingRef.current = true;
     try {
       const response = (await browser.runtime.sendMessage({
         type: "SET_ACTIVE_INSTANCE",
@@ -121,6 +146,8 @@ export function InstanceSelector({
       }
     } catch (err) {
       logger.error("Failed to set active instance:", err);
+    } finally {
+      isSelectingRef.current = false;
     }
   };
 

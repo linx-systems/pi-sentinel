@@ -233,24 +233,8 @@ export function App() {
 
   const handleInstanceChange = (instanceId: string | null) => {
     setActiveInstanceId(instanceId);
-    // Don't call refetch() here - it races with background's async operations
     // Trust STATE_UPDATED broadcast from background via useExtensionState hook
-
-    if (!hasInstances || instanceId !== null) {
-      void browser.runtime
-        .sendMessage({ type: "GET_STATS" })
-        .catch((err) =>
-          logger.debug("Failed to fetch stats after instance switch:", err),
-        );
-      void browser.runtime
-        .sendMessage({ type: "GET_BLOCKING_STATUS" })
-        .catch((err) =>
-          logger.debug(
-            "Failed to fetch blocking status after instance switch:",
-            err,
-          ),
-        );
-    }
+    // Background handles connection, stats refresh, and broadcasts state updates
   };
 
   return (
