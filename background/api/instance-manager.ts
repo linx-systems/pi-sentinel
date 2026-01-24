@@ -26,7 +26,7 @@ export class InstanceManager {
   private masterKeys: Map<string, string> = new Map();
 
   /**
-   * PERF-3: In-memory cache for instance config.
+   * In-memory cache for instance config.
    * Reduces storage I/O during frequent refreshes.
    */
   private instancesCache: PersistedInstances | null = null;
@@ -43,7 +43,7 @@ export class InstanceManager {
       // Load any persisted master keys from session storage
       await this.loadMasterKeysFromSession();
 
-      // PERF-3: Set up storage change listener to invalidate cache
+      // Set up storage change listener to invalidate cache
       browser.storage.onChanged.addListener((changes, areaName) => {
         if (areaName === "local" && changes[STORAGE_KEYS.INSTANCES]) {
           this.instancesCache = null;
@@ -63,10 +63,10 @@ export class InstanceManager {
 
   /**
    * Get all configured instances.
-   * PERF-3: Uses in-memory cache to reduce storage I/O.
+   * Uses in-memory cache to reduce storage I/O.
    */
   async getInstances(): Promise<PersistedInstances> {
-    // PERF-3: Return cached value if available
+    // Return cached value if available
     if (this.instancesCache !== null) {
       return this.instancesCache;
     }
@@ -85,7 +85,7 @@ export class InstanceManager {
       },
     };
 
-    // PERF-3: Store in cache
+    // Store in cache
     this.instancesCache = config;
     return config;
   }

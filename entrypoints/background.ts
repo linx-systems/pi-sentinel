@@ -59,13 +59,13 @@ export default defineBackground(() => {
   });
 
   /**
-   * SEC-3: Ephemeral key for encrypting instance session tokens.
+   * Ephemeral key for encrypting instance session tokens.
    * Generated on initialization, stored only in memory.
    */
   let instanceSessionEncryptionKey: string | null = null;
 
   /**
-   * BUG-4: Flag to prevent stats refresh during instance switch.
+   * Flag to prevent stats refresh during instance switch.
    * Set of instance IDs currently being transitioned.
    */
   const instancesInTransition: Set<string> = new Set();
@@ -181,7 +181,7 @@ export default defineBackground(() => {
     try {
       logger.info("[PiSentinel] Starting background script initialization");
 
-      // SEC-3: Generate ephemeral session encryption key (memory-only)
+      // Generate ephemeral session encryption key (memory-only)
       instanceSessionEncryptionKey = encryption.generateMasterPassword();
       logger.debug("[PiSentinel] Instance session encryption key generated");
 
@@ -212,8 +212,7 @@ export default defineBackground(() => {
       await initializeInstances();
 
       // Subscribe to state changes for badge updates
-      // BUG-6: This subscription is intentionally long-lived (extension lifetime).
-      // No cleanup needed since background script runs continuously.
+      // This subscription is intentionally long-lived (extension lifetime)
       logger.info("[PiSentinel] Setting up state subscription");
       store.subscribe((state) => {
         badgeService.update(state);
@@ -274,7 +273,7 @@ export default defineBackground(() => {
           return false;
         });
 
-        // Try to restore session from storage (SEC-3: uses encrypted storage)
+        // Try to restore session from encrypted storage
         const session = await getInstanceSession(instance.id);
 
         if (session && session.expiresAt > Date.now()) {
@@ -328,7 +327,7 @@ export default defineBackground(() => {
 
   /**
    * Store session for a specific instance.
-   * SEC-3: Session tokens are encrypted with an ephemeral key.
+   * Session tokens are encrypted with an ephemeral key.
    */
   async function storeInstanceSession(
     instanceId: string,
@@ -340,7 +339,7 @@ export default defineBackground(() => {
     const session: SessionData = { sid, csrf, expiresAt };
     const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
 
-    // SEC-3: Encrypt session tokens before storing
+    // Encrypt session tokens before storing
     if (instanceSessionEncryptionKey) {
       try {
         const encryptedSession = await encryption.encrypt(
@@ -367,7 +366,7 @@ export default defineBackground(() => {
 
   /**
    * Get session for a specific instance.
-   * SEC-3: Decrypts session tokens if they were stored encrypted.
+   * Decrypts session tokens if they were stored encrypted.
    */
   async function getInstanceSession(
     instanceId: string,
@@ -380,7 +379,7 @@ export default defineBackground(() => {
       return null;
     }
 
-    // SEC-3: Check if data is encrypted (has 'encrypted' field)
+    // Check if data is encrypted (has 'encrypted' field)
     if (
       instanceSessionEncryptionKey &&
       storedData.encrypted &&
@@ -491,7 +490,7 @@ export default defineBackground(() => {
     message: Message,
     sender: browser.Runtime.MessageSender,
   ): Promise<MessageResponse<unknown>> {
-    // SEC-2: Validate message origin to prevent spoofed messages from other extensions
+    // Validate message origin to prevent spoofed messages from other extensions
     if (sender.id !== browser.runtime.id) {
       logger.warn(
         "[Background] Rejected message from unauthorized sender:",
@@ -1199,10 +1198,12 @@ export default defineBackground(() => {
 
       if (!result.success) {
         // Check if TOTP is required
-        if (
-          result.error?.key === "totp_required" ||
-          result.error?.status === 401
-        ) {
+        // Pi-hole returns: error.key="bad_request", message="No 2FA token found in JSON payload", status=400
+        // NOT "totp_required" - that key doesn't exist in Pi-hole's API
+        const isTotpRequired =
+          result.error?.key === "bad_request" &&
+          result.error?.message?.toLowerCase().includes("2fa");
+        if (isTotpRequired) {
           store.updateInstanceState(instance.id, { totpRequired: true });
           return {
             success: false,
@@ -1219,15 +1220,9 @@ export default defineBackground(() => {
       }
 
       if (result.data?.session) {
-        // Check if TOTP is required but not provided
-        if (result.data.session.totp && !payload.totp) {
-          store.updateInstanceState(instance.id, { totpRequired: true });
-          return {
-            success: false,
-            data: { totpRequired: true },
-            error: "TOTP required",
-          };
-        }
+        // Note: session.totp indicates 2FA is ENABLED on the account, not that it's required
+        // App passwords bypass 2FA, so we should NOT check session.totp here
+        // TOTP requirement is ONLY determined by error responses (error.key === "totp_required")
 
         // Store session
         await storeInstanceSession(

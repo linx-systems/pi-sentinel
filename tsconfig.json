@@ -3,11 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
@@ -20,13 +16,9 @@
     "jsxImportSource": "preact",
     "baseUrl": ".",
     "paths": {
-      "~/*": [
-        "./*"
-      ]
+      "~/*": ["./*"]
     },
-    "types": [
-      "vite/client"
-    ]
+    "types": ["vite/client"]
   },
   "include": [
     "entrypoints/**/*",
@@ -34,10 +26,5 @@
     "background/**/*",
     "wxt.config.ts"
   ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    ".wxt",
-    ".output"
-  ]
+  "exclude": ["node_modules", "dist", ".wxt", ".output"]
 }

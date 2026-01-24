@@ -29,7 +29,7 @@ export class AuthManager {
   private masterKey: string | null = null;
 
   /**
-   * SEC-3: Ephemeral key for encrypting session tokens.
+   * Ephemeral key for encrypting session tokens.
    * Generated on initialization and stored only in memory.
    * This ensures session tokens in storage.session are encrypted.
    */
@@ -46,7 +46,7 @@ export class AuthManager {
    */
   async initialize(): Promise<boolean> {
     try {
-      // SEC-3: Generate ephemeral session encryption key (memory-only)
+      // Generate ephemeral session encryption key (memory-only)
       // This key is used to encrypt session tokens in storage.session
       // It's regenerated each browser session, so old encrypted sessions become invalid
       this.sessionEncryptionKey = encryption.generateMasterPassword();
@@ -221,11 +221,12 @@ export class AuthManager {
 
     if (!result.success) {
       // Check if TOTP is required
-      if (
-        result.error?.key === "totp_required" ||
-        result.error?.status === 401
-      ) {
-        // Check if the response indicates TOTP is needed
+      // Pi-hole returns: error.key="bad_request", message="No 2FA token found in JSON payload", status=400
+      // NOT "totp_required" - that key doesn't exist in Pi-hole's API
+      const isTotpRequired =
+        result.error?.key === "bad_request" &&
+        result.error?.message?.toLowerCase().includes("2fa");
+      if (isTotpRequired) {
         return { success: false, totpRequired: true };
       }
       return {
@@ -235,10 +236,9 @@ export class AuthManager {
     }
 
     if (result.data?.session) {
-      // Check if TOTP is required but not provided
-      if (result.data.session.totp && !totp) {
-        return { success: false, totpRequired: true };
-      }
+      // Note: session.totp indicates 2FA is ENABLED on the account, not that it's required
+      // App passwords bypass 2FA, so we should NOT check session.totp here
+      // TOTP requirement is ONLY determined by error responses (error.key === "totp_required")
 
       // Store session
       await this.storeSession(

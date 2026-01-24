@@ -1,4 +1,4 @@
-import type {Page} from '@playwright/test';
+import type { Page } from "@playwright/test";
 
 /**
  * Checks if the extension is actually accessible in the browser.
@@ -8,20 +8,26 @@ import type {Page} from '@playwright/test';
  * because the extension must be manually loaded in Firefox for
  * UI tests to work.
  */
-export async function isExtensionAccessible(page: Page, extensionId: string): Promise<boolean> {
-    try {
-        // Try to navigate to extension popup
-        const response = await page.goto(`moz-extension://${extensionId}/popup.html`, {
-            waitUntil: 'domcontentloaded',
-            timeout: 3000,
-        });
+export async function isExtensionAccessible(
+  page: Page,
+  extensionId: string,
+): Promise<boolean> {
+  try {
+    // Try to navigate to extension popup
+    const response = await page.goto(
+      `moz-extension://${extensionId}/popup.html`,
+      {
+        waitUntil: "domcontentloaded",
+        timeout: 3000,
+      },
+    );
 
-        // If navigation succeeded, extension is loaded
-        return response?.ok() ?? false;
-    } catch (error) {
-        // NS_ERROR_NOT_AVAILABLE or timeout means extension isn't loaded
-        return false;
-    }
+    // If navigation succeeded, extension is loaded
+    return response?.ok() ?? false;
+  } catch (error) {
+    // NS_ERROR_NOT_AVAILABLE or timeout means extension isn't loaded
+    return false;
+  }
 }
 
 /**
@@ -40,23 +46,25 @@ export async function isExtensionAccessible(page: Page, extensionId: string): Pr
  * ```
  */
 export async function skipIfExtensionNotAccessible(
-    page: Page,
-    extensionId: string | undefined,
-    testSkip: () => void
+  page: Page,
+  extensionId: string | undefined,
+  testSkip: () => void,
 ): Promise<boolean> {
-    if (!extensionId) {
-        console.log('⚠️  Set EXTENSION_ID in .env.test to enable this test');
-        testSkip();
-        return false;
-    }
+  if (!extensionId) {
+    console.log("⚠️  Set EXTENSION_ID in .env.test to enable this test");
+    testSkip();
+    return false;
+  }
 
-    const accessible = await isExtensionAccessible(page, extensionId);
+  const accessible = await isExtensionAccessible(page, extensionId);
 
-    if (!accessible) {
-        console.log('⚠️  Extension not loaded in browser. See tests/e2e/RUN_WITH_EXTENSION.md');
-        testSkip();
-        return false;
-    }
+  if (!accessible) {
+    console.log(
+      "⚠️  Extension not loaded in browser. See tests/e2e/RUN_WITH_EXTENSION.md",
+    );
+    testSkip();
+    return false;
+  }
 
-    return true;
+  return true;
 }

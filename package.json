@@ -9,7 +9,10 @@
     "build": "wxt build",
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
-    "lint": "eslint entrypoints utils background --ext .ts,.tsx",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "lint:ext": "web-ext lint --source-dir=dist/firefox-mv3",
     "test": "vitest run",
     "test:unit": "vitest run",
@@ -25,19 +28,27 @@
     "package": "bun run build && cd dist/firefox-mv3 && zip -r ../../pisentinel.xpi .",
     "sign": "bun run build && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET",
     "sign:channel": "bun run build && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET --channel=unlisted",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
     "@playwright/test": "^1.57.0",
     "@preact/preset-vite": "^2.10.2",
     "@resvg/resvg-js": "^2.6.2",
     "@testing-library/preact": "^3.2.4",
     "@testing-library/user-event": "^14.6.1",
     "@types/webextension-polyfill": "^0.12.1",
+    "@vitest/coverage-v8": "^4.0.18",
     "@vitest/ui": "^4.0.17",
     "dotenv": "^17.2.3",
     "eslint": "^9.17.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.0.1",
     "happy-dom": "^20.3.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.8.1",
     "sharp": "^0.34.5",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.2",
@@ -49,5 +60,14 @@
   "dependencies": {
     "preact": "^10.25.4",
     "webextension-polyfill": "^0.12.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "prettier --write",
+      "eslint --fix"
+    ],
+    "*.{json,css,html}": [
+      "prettier --write"
+    ]
   }
 }

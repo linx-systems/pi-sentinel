@@ -449,7 +449,7 @@ body {
   color: #666;
 }
 
-/* Auto-search toggle (Phase 4) */
+/* Auto-search toggle */
 .auto-search-toggle {
   display: flex;
   align-items: center;

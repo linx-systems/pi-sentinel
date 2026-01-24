@@ -43,10 +43,7 @@ export function PasswordPromptModal({
 
   return (
     <div class="modal-overlay" onClick={onClose}>
-      <div
-        class="modal password-modal"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div class="modal password-modal" onClick={(e) => e.stopPropagation()}>
         <div class="modal-header">
           <h2>Connect to {displayName}</h2>
           <button class="modal-close" onClick={onClose} title="Close">
@@ -64,8 +61,8 @@ export function PasswordPromptModal({
             )}
 
             <p class="modal-description">
-              This instance does not store your password. Enter it to connect, or
-              leave it blank if there's no password.
+              This instance does not store your password. Enter it to connect,
+              or leave it blank if there's no password.
             </p>
 
             <div class="form-group">
@@ -82,9 +79,7 @@ export function PasswordPromptModal({
                 autoComplete="current-password"
                 disabled={isLoading}
               />
-              <p class="hint">
-                Your password is used only for this session.
-              </p>
+              <p class="hint">Your password is used only for this session.</p>
             </div>
           </div>
 
@@ -97,11 +92,7 @@ export function PasswordPromptModal({
             >
               Cancel
             </button>
-            <button
-              type="submit"
-              class="btn btn-primary"
-              disabled={isLoading}
-            >
+            <button type="submit" class="btn btn-primary" disabled={isLoading}>
               {isLoading ? "Connecting..." : "Connect"}
             </button>
           </div>

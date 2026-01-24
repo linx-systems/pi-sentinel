@@ -1,11 +1,11 @@
-import {defineConfig, devices} from '@playwright/test';
-import * as dotenv from 'dotenv';
-import * as path from 'path';
-import {fileURLToPath} from 'url';
+import { defineConfig, devices } from "@playwright/test";
+import * as dotenv from "dotenv";
+import * as path from "path";
+import { fileURLToPath } from "url";
 
 // Load .env.test file for test environment variables
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({path: path.resolve(__dirname, '.env.test')});
+dotenv.config({ path: path.resolve(__dirname, ".env.test") });
 
 /**
  * Playwright configuration for E2E testing the browser extension.
@@ -40,33 +40,35 @@ dotenv.config({path: path.resolve(__dirname, '.env.test')});
  */
 
 export default defineConfig({
-    testDir: './tests/e2e',
-    fullyParallel: false, // Extension tests should run sequentially
-    forbidOnly: !!process.env.CI,
-    retries: process.env.CI ? 2 : 0,
-    workers: 1, // Run tests one at a time for extensions
-    reporter: 'html',
+  testDir: "./tests/e2e",
+  fullyParallel: false, // Extension tests should run sequentially
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: 1, // Run tests one at a time for extensions
+  reporter: "html",
 
-    use: {
-        baseURL: 'http://localhost:8765', // Mock server URL
-        trace: 'on-first-retry',
-        screenshot: 'only-on-failure',
-        video: 'retain-on-failure',
+  use: {
+    baseURL: "http://localhost:8765", // Mock server URL
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
+  },
+
+  projects: [
+    {
+      name: "firefox-extension",
+      use: {
+        ...devices["Desktop Firefox"],
+      },
     },
+  ],
 
-    projects: [
-        {
-            name: 'firefox-extension',
-            use: {
-                ...devices['Desktop Firefox'],
-            },
-        },
-    ],
-
-    // Build extension before running tests
-    webServer: process.env.CI ? undefined : {
-        command: 'npm run build:firefox',
+  // Build extension before running tests
+  webServer: process.env.CI
+    ? undefined
+    : {
+        command: "npm run build:firefox",
         timeout: 60 * 1000,
         reuseExistingServer: true,
-    },
+      },
 });

@@ -149,6 +149,9 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
           <p class="hint">
             Stay logged in across browser restarts. Password is encrypted but
             stored locally. Disable on shared computers.
+            <br />
+            <strong>Note:</strong> Does not work with TOTP 2FA. Use an app
+            password instead.
           </p>
         </div>
 

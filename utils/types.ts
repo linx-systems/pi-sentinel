@@ -110,7 +110,7 @@ export interface SessionData {
 }
 
 /**
- * SEC-3: Encrypted session data stored in storage.session.
+ * Encrypted session data stored in storage.session.
  * The actual session tokens are encrypted with an ephemeral key.
  */
 export interface EncryptedSessionData {

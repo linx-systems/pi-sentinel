@@ -205,9 +205,10 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     }
 
     try {
-      const payload: { instanceId: string; password?: string; totp?: string } = {
-        instanceId,
-      };
+      const payload: { instanceId: string; password?: string; totp?: string } =
+        {
+          instanceId,
+        };
       if (password !== undefined) {
         payload.password = password;
       }
@@ -240,8 +241,7 @@ export function InstanceList({ onMessage }: InstanceListProps) {
       }
     } catch (err) {
       logger.error("Failed to connect instance:", err);
-      const message =
-        err instanceof Error ? err.message : "Failed to connect";
+      const message = err instanceof Error ? err.message : "Failed to connect";
 
       if (fromPrompt) {
         setPasswordPromptError(message);
@@ -267,12 +267,23 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     const password = passwordFromInput ?? pendingPassword ?? undefined;
 
     try {
-      await connectInstance({ instanceId: connectingInstanceId, password, totp });
+      await connectInstance({
+        instanceId: connectingInstanceId,
+        password,
+        totp,
+      });
     } finally {
       if (password === undefined && useStoredPasswordForTotp) {
         setPendingPassword("");
       }
     }
+  };
+
+  const handleTotpCancel = () => {
+    setTotpRequired(false);
+    setConnectingInstanceId(null);
+    setPendingPassword("");
+    setUseStoredPasswordForTotp(false);
   };
 
   const handlePasswordPromptClose = () => {
@@ -352,6 +363,7 @@ export function InstanceList({ onMessage }: InstanceListProps) {
         onSubmit={async (totp: string, password: string) => {
           await handleTotpSubmit(totp, password);
         }}
+        onCancel={handleTotpCancel}
         isLoading={false}
         showPassword={false}
       />

@@ -1,5 +1,5 @@
-import {test as base} from '@playwright/test';
-import {MockPiHoleServer} from './server/mock-server';
+import { test as base } from "@playwright/test";
+import { MockPiHoleServer } from "./server/mock-server";
 
 /**
  * Extended Playwright test fixture with MockPiHoleServer
@@ -26,18 +26,18 @@ import {MockPiHoleServer} from './server/mock-server';
  * ```
  */
 export const test = base.extend<{ mockServer: MockPiHoleServer }>({
-    mockServer: async ({}, use) => {
-        const server = new MockPiHoleServer(8765);
+  mockServer: async ({}, use) => {
+    const server = new MockPiHoleServer(8765);
 
-        // Start the mock server before the test
-        await server.start();
+    // Start the mock server before the test
+    await server.start();
 
-        // Provide the server to the test
-        await use(server);
+    // Provide the server to the test
+    await use(server);
 
-        // Stop the mock server after the test
-        await server.stop();
-    },
+    // Stop the mock server after the test
+    await server.stop();
+  },
 });
 
-export {expect} from '@playwright/test';
+export { expect } from "@playwright/test";

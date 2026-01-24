@@ -42,7 +42,7 @@ class StateStore {
   // State change listeners
   private listeners: Set<StateListener> = new Set();
 
-  // BUG-1: Mutex for state updates to prevent race conditions
+  // Mutex prevents race conditions during concurrent state updates
   private updateLock: Promise<void> = Promise.resolve();
 
   constructor() {
@@ -50,7 +50,7 @@ class StateStore {
   }
 
   /**
-   * BUG-1: Acquire lock for state updates.
+   * Acquire lock for state updates.
    * Ensures serialized access to state modifications.
    */
   private async withLock<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -130,8 +130,7 @@ class StateStore {
     // Update legacy state
     this.state = { ...this.state, ...partial };
 
-    // Also update active instance state if set
-    // BUG-2: Pass suppressBroadcast to prevent duplicate broadcasts
+    // Also update active instance state if set (suppress broadcast to prevent duplicates)
     if (this.activeInstanceId) {
       this.updateInstanceState(
         this.activeInstanceId,
@@ -149,7 +148,6 @@ class StateStore {
     }
 
     this.notifyListeners();
-    // BUG-5: Handle broadcast errors
     this.broadcastStateUpdate().catch((error) => {
       logger.debug("Failed to broadcast state update:", error);
     });
@@ -162,7 +160,6 @@ class StateStore {
     this.state = this.getInitialState();
     this.tabDomains.clear();
     this.notifyListeners();
-    // BUG-5: Handle broadcast errors
     this.broadcastStateUpdate().catch((error) => {
       logger.debug("Failed to broadcast state update:", error);
     });
@@ -185,7 +182,6 @@ class StateStore {
     }
 
     this.notifyListeners();
-    // BUG-5: Handle broadcast errors
     this.broadcastStateUpdate().catch((error) => {
       logger.debug("Failed to broadcast state update:", error);
     });
@@ -207,20 +203,19 @@ class StateStore {
 
   /**
    * Update state for a specific instance.
-   * BUG-1: Uses lock to prevent race conditions during concurrent updates.
-   * BUG-2: suppressBroadcast parameter prevents duplicate broadcasts when called from setState().
+   * Uses lock to prevent race conditions during concurrent updates.
+   * suppressBroadcast parameter prevents duplicate broadcasts when called from setState().
    */
   updateInstanceState(
     instanceId: string,
     partial: Partial<Omit<InstanceState, "instanceId">>,
     options?: { suppressBroadcast?: boolean },
   ): void {
-    // BUG-1: Use lock to serialize state updates
+    // Use lock to serialize state updates
     // Note: We queue the update but don't await - callers can await updateInstanceStateAsync if needed
     this.withLock(() => {
       this.updateInstanceStateInternal(instanceId, partial, options);
     }).catch((error) => {
-      // BUG-5: Handle any errors from the locked operation
       logger.error("Error in updateInstanceState lock:", error);
     });
   }
@@ -281,7 +276,7 @@ class StateStore {
       });
     }
 
-    // BUG-2: Skip broadcast if suppressed (to prevent duplicates from setState)
+    // Skip broadcast if suppressed (to prevent duplicates from setState)
     if (options?.suppressBroadcast) {
       return;
     }
@@ -292,14 +287,12 @@ class StateStore {
         this.instanceStates.get(instanceId)!,
       );
       this.notifyListeners();
-      // BUG-5: Handle broadcast errors
       this.broadcastStateUpdate().catch((error) => {
         logger.debug("Failed to broadcast state update:", error);
       });
     } else if (this.activeInstanceId === null) {
       // In "All" mode, broadcast aggregated state when any instance updates
       this.notifyListeners();
-      // BUG-5: Handle broadcast errors
       this.broadcastStateUpdate().catch((error) => {
         logger.debug("Failed to broadcast state update:", error);
       });
@@ -319,7 +312,6 @@ class StateStore {
     if (instanceId === this.activeInstanceId) {
       this.state = this.getInitialState();
       this.notifyListeners();
-      // BUG-5: Handle broadcast errors
       this.broadcastStateUpdate().catch((error) => {
         logger.debug("Failed to broadcast state update:", error);
       });
@@ -337,7 +329,6 @@ class StateStore {
       this.activeInstanceId = null;
       this.state = this.getInitialState();
       this.notifyListeners();
-      // BUG-5: Handle broadcast errors
       this.broadcastStateUpdate().catch((error) => {
         logger.debug("Failed to broadcast state update:", error);
       });

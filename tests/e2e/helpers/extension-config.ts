@@ -1,4 +1,4 @@
-import type {BrowserContext} from '@playwright/test';
+import type { BrowserContext } from "@playwright/test";
 
 /**
  * Configure the extension to use the mock server for testing
@@ -28,38 +28,38 @@ import type {BrowserContext} from '@playwright/test';
  * ```
  */
 export async function configureExtensionForTesting(
-    context: BrowserContext
+  context: BrowserContext,
 ): Promise<void> {
-    await context.addInitScript(() => {
-        // Store original get function
-        const originalGet = browser.storage.local.get;
+  await context.addInitScript(() => {
+    // Store original get function
+    const originalGet = browser.storage.local.get;
 
-        // Override browser.storage.local.get to return test config
-        browser.storage.local.get = async (keys: any) => {
-            // Call original to get any existing values
-            const result = await originalGet.call(browser.storage.local, keys);
+    // Override browser.storage.local.get to return test config
+    browser.storage.local.get = async (keys: any) => {
+      // Call original to get any existing values
+      const result = await originalGet.call(browser.storage.local, keys);
 
-            // Override Pi-hole URL for testing
-            if (keys === 'pisentinel_config' || keys === null || keys === undefined) {
-                return {
-                    ...result,
-                    pisentinel_config: {
-                        piholeUrl: 'http://localhost:8765',
-                        encryptedPassword: null,
-                        refreshInterval: 30,
-                        notificationsEnabled: false,
-                        rememberPassword: false,
-                        encryptedMasterKey: null,
-                        ...(result?.pisentinel_config || {}),
-                    },
-                };
-            }
-
-            return result;
+      // Override Pi-hole URL for testing
+      if (keys === "pisentinel_config" || keys === null || keys === undefined) {
+        return {
+          ...result,
+          pisentinel_config: {
+            piholeUrl: "http://localhost:8765",
+            encryptedPassword: null,
+            refreshInterval: 30,
+            notificationsEnabled: false,
+            rememberPassword: false,
+            encryptedMasterKey: null,
+            ...(result?.pisentinel_config || {}),
+          },
         };
+      }
 
-        console.log(
-            '[E2E Test] Extension configured to use mock server at http://localhost:8765'
-        );
-    });
+      return result;
+    };
+
+    console.log(
+      "[E2E Test] Extension configured to use mock server at http://localhost:8765",
+    );
+  });
 }

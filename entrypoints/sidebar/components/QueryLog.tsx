@@ -42,11 +42,11 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     new Map(),
   );
 
-  // Phase 1: Auto-refresh state
+  // Auto-refresh state
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const refreshIntervalRef = useRef<number | null>(null);
 
-  // Phase 2: Scroll tracking state - SIMPLIFIED
+  // Scroll tracking state
   const [isScrolledDown, setIsScrolledDown] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [newQueryCount, setNewQueryCount] = useState(0);
@@ -60,7 +60,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
   const sortQueries = (items: QueryEntry[]) =>
     [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-  // Phase 4: Load auto-refresh preference on mount
+  // Load auto-refresh preference on mount
   useEffect(() => {
     browser.storage.local.get("pisentinel_queryAutoRefresh").then((result) => {
       if (result.pisentinel_queryAutoRefresh !== undefined) {
@@ -69,7 +69,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     });
   }, []);
 
-  // Phase 4: Handle disconnection - stop auto-refresh
+  // Handle disconnection - stop auto-refresh
   useEffect(() => {
     const handleMessage = (msg: any) => {
       if (msg.type === "STATE_UPDATED" && !msg.payload?.isConnected) {
@@ -81,7 +81,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     return () => browser.runtime.onMessage.removeListener(handleMessage);
   }, []);
 
-  // Phase 4: Save preference on change
+  // Save preference on change
   const toggleAutoRefresh = async (enabled: boolean) => {
     setAutoRefreshEnabled(enabled);
     await browser.storage.local.set({ pisentinel_queryAutoRefresh: enabled });
@@ -92,7 +92,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     loadQueries();
   }, []);
 
-  // Phase 1: Auto-refresh interval
+  // Auto-refresh interval
   useEffect(() => {
     if (!autoRefreshEnabled) {
       if (refreshIntervalRef.current) {
@@ -113,7 +113,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     };
   }, [autoRefreshEnabled]);
 
-  // SIMPLIFIED: Handle scroll with onScroll event
+  // Handle scroll with onScroll event
   const handleScroll = (e: Event) => {
     const container = e.target as HTMLDivElement;
     const scrolledDown = container.scrollTop > 50; // More than 50px from top
@@ -157,7 +157,6 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     });
   };
 
-  // SIMPLIFIED: Load queries
   const loadQueries = async () => {
     const isInitialLoad = !hasLoadedOnce.current;
 
@@ -264,7 +263,6 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
           onClick={() => setFilter("allowed")}
         />
 
-        {/* Phase 1: Auto-refresh toggle */}
         <label class="auto-refresh-toggle" style={{ marginLeft: "auto" }}>
           <input
             type="checkbox"
@@ -316,7 +314,6 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
         </div>
       )}
 
-      {/* Phase 3: Back-to-top button */}
       {isScrolledDown && autoRefreshEnabled && (
         <button
           class="back-to-top-btn"

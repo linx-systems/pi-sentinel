@@ -115,7 +115,6 @@ export function InstanceCard({
           <DeleteIcon />
         </button>
       </div>
-
     </div>
   );
 }

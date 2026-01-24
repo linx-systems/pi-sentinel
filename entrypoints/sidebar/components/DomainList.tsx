@@ -47,7 +47,7 @@ export function DomainList({
   const [isSearchingAll, setIsSearchingAll] = useState(false);
   const { showToast } = useToast();
 
-  // Auto-search state (Phase 1)
+  // Auto-search state
   const [autoSearchEnabled, setAutoSearchEnabled] = useState(false);
   const [autoSearchProgress, setAutoSearchProgress] = useState<{
     current: number;
@@ -73,7 +73,7 @@ export function DomainList({
     lastFailure: 0,
   });
 
-  // Load auto-search preference and cached results from storage on mount (Phase 1)
+  // Load auto-search preference and cached results from storage on mount
   // NOTE: Auto-search is OFF by default to prevent overwhelming Pi-hole
   useEffect(() => {
     browser.storage.local
@@ -111,20 +111,20 @@ export function DomainList({
       });
   }, []);
 
-  // Clear search state when page changes (Phase 2)
+  // Clear search state when page changes
   useEffect(() => {
     domainSearchState.current.clear();
     retryAttempts.current.clear();
     currentlySearching.current.clear();
   }, [firstPartyDomain]);
 
-  // Toggle auto-search and persist to storage (Phase 1)
+  // Toggle auto-search and persist to storage
   const toggleAutoSearch = async (enabled: boolean) => {
     setAutoSearchEnabled(enabled);
     await browser.storage.local.set({ pisentinel_autoSearch: enabled });
   };
 
-  // Auto-search logic with retry support (Phase 3)
+  // Auto-search logic with retry support
   useEffect(() => {
     if (!autoSearchEnabled) return;
 
@@ -194,7 +194,7 @@ export function DomainList({
 
       setAutoSearchProgress({ current: 0, total: newDomains.length });
 
-      // Phase 1: Initial search
+      // Initial search pass
       while (queue.length > 0 && !cancelled) {
         // Circuit breaker: Stop if too many failures
         if (circuitBreaker.current.failures >= MAX_FAILURES) {
@@ -270,7 +270,7 @@ export function DomainList({
         }
       }
 
-      // Phase 2: Retry failed domains
+      // Retry failed domains
       if (failedDomains.length > 0 && !cancelled) {
         logger.debug(
           `[DomainList] Retrying ${failedDomains.length} failed domains`,
