@@ -77,9 +77,7 @@ export function App() {
       lastStatsRequest.current = { key, at: now };
       void browser.runtime
         .sendMessage({ type: "GET_STATS" })
-        .catch((err) =>
-          logger.debug("Failed to fetch stats for popup:", err),
-        );
+        .catch((err) => logger.debug("Failed to fetch stats for popup:", err));
       void browser.runtime
         .sendMessage({ type: "GET_BLOCKING_STATUS" })
         .catch((err) =>
@@ -112,9 +110,9 @@ export function App() {
     if (!config) {
       try {
         const stored = await browser.storage.local.get(STORAGE_KEYS.INSTANCES);
-        const storedConfig = stored[
-          STORAGE_KEYS.INSTANCES
-        ] as PersistedInstances | undefined;
+        const storedConfig = stored[STORAGE_KEYS.INSTANCES] as
+          | PersistedInstances
+          | undefined;
         if (storedConfig) {
           config = storedConfig;
         }
@@ -182,7 +180,7 @@ export function App() {
       ? instances[0]
       : null;
   const adminUrl = hasInstances
-    ? effectiveInstance?.piholeUrl ?? null
+    ? (effectiveInstance?.piholeUrl ?? null)
     : piholeUrl;
   const showAdminLink =
     Boolean(adminUrl) &&
@@ -235,7 +233,8 @@ export function App() {
 
   const handleInstanceChange = (instanceId: string | null) => {
     setActiveInstanceId(instanceId);
-    refetch();
+    // Don't call refetch() here - it races with background's async operations
+    // Trust STATE_UPDATED broadcast from background via useExtensionState hook
 
     if (!hasInstances || instanceId !== null) {
       void browser.runtime
