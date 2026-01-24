@@ -88,6 +88,8 @@ background script**:
 - Avoid stat refresh loops: only refresh when stats are stale (cache TTL).
 - Options pages use storage-based messaging (`utils/storage-message.ts`) because
   `runtime.sendMessage` responses can be unreliable in Firefox options pages.
+- Popup instance switching must not call `refetch()` in `handleInstanceChange`;
+  it races with background async ops. Rely on `STATE_UPDATED` broadcast.
 
 ### State Management
 

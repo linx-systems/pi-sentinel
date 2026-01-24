@@ -17,3 +17,5 @@ Notes for agents working in this repo (recent findings).
   unreliable `runtime.sendMessage` responses in Firefox options pages.
 - `useExtensionState` retries `GET_STATE` on transient "background unreachable"
   errors and clears errors when a `STATE_UPDATED` message arrives.
+- Popup `handleInstanceChange` should NOT call `refetch()` - it races with
+  background's async operations. Trust `STATE_UPDATED` broadcast instead.
