@@ -1,6 +1,6 @@
 {
   "name": "pisentinel",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Firefox MV3 extension for Pi-hole v6 integration",
   "type": "module",
   "scripts": {
