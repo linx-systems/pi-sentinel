@@ -13,7 +13,6 @@ and manage domains directly from your browser.
 - **Quick Actions** - Add domains to allowlist/denylist with one click
 - **Query Log** - Browse recent DNS queries with blocked/allowed filtering
 - **2FA Support** - Full TOTP authentication support for secured Pi-hole instances
-- **Secure Storage** - Credentials encrypted with PBKDF2 + AES-256-GCM
 
 ## Screenshots
 
@@ -341,4 +340,4 @@ Contributions are welcome! Here's how to get started:
 
 ## License
 
-MIT
+See [LICENSE](LICENSE.txt) for details.
