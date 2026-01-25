@@ -112,7 +112,17 @@ export function parseApiError(
 
 /**
  * Determine if a query status indicates the query was blocked.
- * Handles both Pi-hole v6 string statuses and legacy numeric statuses.
+ *
+ * Pi-hole v6 uses string statuses:
+ * - Blocked: GRAVITY, DENYLIST, REGEX, EXTERNAL_BLOCKED_*, SPECIAL_DOMAIN
+ * - Allowed: FORWARDED, CACHE, UPSTREAM_*, RETRIED
+ *
+ * Legacy Pi-hole (v5 and earlier) used numeric statuses:
+ * - Blocked: 2-11
+ * - Allowed: 0, 1, 12+
+ *
+ * @param status - Query status from Pi-hole API (string or number)
+ * @returns True if the query was blocked
  */
 export function isQueryBlocked(
   status: string | number | undefined | null,

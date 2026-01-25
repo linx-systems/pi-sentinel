@@ -311,8 +311,16 @@ export function validateAll(
 }
 
 /**
- * Get registrable domain (eTLD+1) for comparison
- * Handles multi-part TLDs correctly
+ * Get registrable domain (eTLD+1) for site comparison.
+ * Handles multi-part TLDs (e.g., .co.uk, .com.au) correctly.
+ *
+ * @example
+ * getRegistrableDomain("www.example.com")     // "example.com"
+ * getRegistrableDomain("api.example.co.uk")   // "example.co.uk"
+ * getRegistrableDomain("sub.domain.com.au")   // "domain.com.au"
+ *
+ * @param domain - Full domain name
+ * @returns Registrable domain (eTLD+1)
  */
 export function getRegistrableDomain(domain: string): string {
   const parts = domain.toLowerCase().split(".");
@@ -331,8 +339,17 @@ export function getRegistrableDomain(domain: string): string {
 }
 
 /**
- * Check if two domains are from the same site (same eTLD+1)
- * Fixes the previous flawed implementation
+ * Check if two domains are from the same site (same eTLD+1).
+ *
+ * @example
+ * isSameSite("www.example.com", "api.example.com")   // true
+ * isSameSite("example.co.uk", "other.co.uk")         // false
+ * isSameSite("192.168.1.1", "192.168.1.1")           // true (exact match for IPs)
+ * isSameSite("localhost", "localhost")               // true
+ *
+ * @param domain1 - First domain
+ * @param domain2 - Second domain
+ * @returns True if domains share the same registrable domain
  */
 export function isSameSite(domain1: string, domain2: string): boolean {
   // Handle IP addresses

@@ -50,8 +50,16 @@ class StateStore {
   }
 
   /**
-   * Acquire lock for state updates.
+   * Acquire lock for state updates via promise chaining.
    * Ensures serialized access to state modifications.
+   *
+   * Uses a chained-promise pattern instead of a traditional mutex:
+   * 1. New operations chain onto `this.updateLock`
+   * 2. Each operation awaits the previous one before executing
+   * 3. Release happens in finally block, unblocking next operation
+   *
+   * @param fn - Function to execute while holding the lock
+   * @returns Result of the function
    */
   private async withLock<T>(fn: () => T | Promise<T>): Promise<T> {
     // Chain onto existing lock
