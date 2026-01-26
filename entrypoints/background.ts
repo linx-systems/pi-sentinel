@@ -76,6 +76,78 @@ export default defineBackground(() => {
    */
   const instancesInTransition: Set<string> = new Set();
 
+  // ===== Circuit Breaker for Auth Retries =====
+  // Prevents infinite retry loops when Pi-hole sessions are externally invalidated
+
+  /**
+   * Consecutive auth failure counter for legacy single-instance mode.
+   * Circuit breaker opens when this reaches MAX_CONSECUTIVE_AUTH_FAILURES.
+   */
+  let consecutiveAuthFailures = 0;
+
+  /**
+   * Per-instance auth failure counters for multi-instance mode.
+   * Maps instance ID to failure count.
+   */
+  const instanceAuthFailures = new Map<string, number>();
+
+  /**
+   * Get consecutive auth failures for an instance.
+   */
+  function getInstanceAuthFailures(instanceId: string): number {
+    return instanceAuthFailures.get(instanceId) ?? 0;
+  }
+
+  /**
+   * Increment auth failures for an instance.
+   */
+  function incrementInstanceAuthFailures(instanceId: string): void {
+    const current = getInstanceAuthFailures(instanceId);
+    instanceAuthFailures.set(instanceId, current + 1);
+    logger.warn(
+      `[PiSentinel] Auth failed for instance ${instanceId} (${current + 1}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
+    );
+  }
+
+  /**
+   * Reset auth failures for an instance (on successful auth or manual connect).
+   */
+  function resetInstanceAuthFailures(instanceId: string): void {
+    if (instanceAuthFailures.has(instanceId)) {
+      instanceAuthFailures.delete(instanceId);
+      logger.debug(
+        `[PiSentinel] Auth failure counter reset for instance ${instanceId}`,
+      );
+    }
+  }
+
+  /**
+   * Check if circuit breaker is open for an instance.
+   */
+  function isInstanceCircuitBreakerOpen(instanceId: string): boolean {
+    return (
+      getInstanceAuthFailures(instanceId) >=
+      DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES
+    );
+  }
+
+  /**
+   * Reset legacy auth failure counter.
+   */
+  function resetLegacyAuthFailures(): void {
+    if (consecutiveAuthFailures > 0) {
+      consecutiveAuthFailures = 0;
+      logger.debug("[PiSentinel] Legacy auth failure counter reset");
+    }
+  }
+
+  /**
+   * Check if legacy circuit breaker is open.
+   */
+  function isLegacyCircuitBreakerOpen(): boolean {
+    return consecutiveAuthFailures >= DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES;
+  }
+
   type ConnectionErrorInfo = {
     key?: string;
     message?: string;
@@ -218,11 +290,26 @@ export default defineBackground(() => {
       // Set up auth re-authentication handler for legacy API client
       logger.info("[PiSentinel] Setting up auth handler");
       apiClient.setAuthRequiredHandler(async () => {
+        // Circuit breaker: stop auto-retry if too many consecutive failures
+        if (isLegacyCircuitBreakerOpen()) {
+          logger.warn(
+            `[PiSentinel] Legacy auth circuit breaker open (${consecutiveAuthFailures} failures) - skipping auto-retry`,
+          );
+          return false;
+        }
+
         const password = await authManager.getDecryptedPassword();
         if (password !== null) {
           // authManager.authenticate already handles logout-before-auth
           const result = await authManager.authenticate(password);
-          return result.success;
+          if (result.success) {
+            resetLegacyAuthFailures();
+            return true;
+          }
+          consecutiveAuthFailures++;
+          logger.warn(
+            `[PiSentinel] Legacy auth failed (${consecutiveAuthFailures}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
+          );
         }
         return false;
       });
@@ -283,6 +370,14 @@ export default defineBackground(() => {
 
         // Set up re-auth handler for this instance
         apiClientManager.setAuthHandler(instance.id, async () => {
+          // Circuit breaker: stop auto-retry if too many consecutive failures
+          if (isInstanceCircuitBreakerOpen(instance.id)) {
+            logger.warn(
+              `[PiSentinel] Auth circuit breaker open for instance ${instance.id} - skipping auto-retry`,
+            );
+            return false;
+          }
+
           const password = await instanceManager.getDecryptedPassword(
             instance.id,
           );
@@ -296,7 +391,11 @@ export default defineBackground(() => {
               }
             }
             const result = await client.authenticate(password);
-            return result.success;
+            if (result.success) {
+              resetInstanceAuthFailures(instance.id);
+              return true;
+            }
+            incrementInstanceAuthFailures(instance.id);
           }
           return false;
         });
@@ -565,6 +664,9 @@ export default defineBackground(() => {
     password: string;
     totp?: string;
   }): Promise<MessageResponse<{ totpRequired?: boolean }>> {
+    // Reset circuit breaker on manual connect attempt - user is explicitly trying
+    resetLegacyAuthFailures();
+
     const result = await authManager.authenticate(
       payload.password,
       payload.totp,
@@ -603,21 +705,26 @@ export default defineBackground(() => {
     store.reset();
     await badgeService.clear();
 
-    // Clean up storage-based communication artifacts
-    await browser.storage.local.remove([
-      "authResponse",
-      "configResponse",
-      "logoutResponse",
-      "testConnectionResponse",
-      "addInstanceResponse",
-      "updateInstanceResponse",
-      "pendingAuth",
-      "pendingConfig",
-      "pendingLogout",
-      "pendingTestConnection",
-      "pendingAddInstance",
-      "pendingUpdateInstance",
-    ]);
+    // Clean up storage-based communication artifacts (best effort)
+    try {
+      await browser.storage.local.remove([
+        "authResponse",
+        "configResponse",
+        "logoutResponse",
+        "testConnectionResponse",
+        "addInstanceResponse",
+        "updateInstanceResponse",
+        "pendingAuth",
+        "pendingConfig",
+        "pendingLogout",
+        "pendingTestConnection",
+        "pendingAddInstance",
+        "pendingUpdateInstance",
+      ]);
+    } catch (error) {
+      logger.warn("[PiSentinel] Failed to clean up storage artifacts:", error);
+      // Continue with logout - cleanup failure is non-critical
+    }
 
     return { success: true };
   }
@@ -1023,6 +1130,14 @@ export default defineBackground(() => {
 
       // Set up re-auth handler
       apiClientManager.setAuthHandler(instance.id, async () => {
+        // Circuit breaker: stop auto-retry if too many consecutive failures
+        if (isInstanceCircuitBreakerOpen(instance.id)) {
+          logger.warn(
+            `[PiSentinel] Auth circuit breaker open for instance ${instance.id} - skipping auto-retry`,
+          );
+          return false;
+        }
+
         const password = await instanceManager.getDecryptedPassword(
           instance.id,
         );
@@ -1036,7 +1151,11 @@ export default defineBackground(() => {
             }
           }
           const result = await client.authenticate(password);
-          return result.success;
+          if (result.success) {
+            resetInstanceAuthFailures(instance.id);
+            return true;
+          }
+          incrementInstanceAuthFailures(instance.id);
         }
         return false;
       });
@@ -1101,10 +1220,15 @@ export default defineBackground(() => {
   async function handleDeleteInstance(
     instanceId: string,
   ): Promise<MessageResponse<void>> {
+    logger.debug(`[Background] handleDeleteInstance called for: ${instanceId}`);
     try {
       const deleted = await instanceManager.deleteInstance(instanceId);
+      logger.debug(
+        `[Background] instanceManager.deleteInstance returned: ${deleted}`,
+      );
 
       if (!deleted) {
+        logger.warn(`[Background] Instance not found: ${instanceId}`);
         return { success: false, error: "Instance not found" };
       }
 
@@ -1114,7 +1238,9 @@ export default defineBackground(() => {
 
       const config = await instanceManager.getInstances();
       store.setActiveInstanceId(config.activeInstanceId);
+      logger.debug(`[Background] About to broadcast instances updated`);
       await broadcastInstancesUpdated();
+      logger.debug(`[Background] Broadcast complete, returning success`);
       return { success: true };
     } catch (error) {
       logger.error("[Background] Error deleting instance:", error);
@@ -1211,6 +1337,9 @@ export default defineBackground(() => {
       if (!instance) {
         return { success: false, error: "Instance not found" };
       }
+
+      // Reset circuit breaker on manual connect attempt - user is explicitly trying
+      resetInstanceAuthFailures(instance.id);
 
       // Skip if already connected and no new credentials provided
       // This prevents duplicate sessions from race conditions (e.g., init + UI connect)
@@ -1355,9 +1484,17 @@ export default defineBackground(() => {
     }
 
     // Always clear local state - user wants to disconnect
-    const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
-    await browser.storage.session.remove(sessionKey);
-    store.resetInstanceState(instanceId);
+    try {
+      const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
+      await browser.storage.session.remove(sessionKey);
+      store.resetInstanceState(instanceId);
+
+      // CRITICAL: Broadcast state change to update UI (was missing - caused stale "Connected" status)
+      await broadcastInstancesUpdated();
+    } catch (error) {
+      logger.error("[Background] Error clearing disconnect state:", error);
+      // Still return success - the API logout may have worked
+    }
 
     if (!logoutSucceeded) {
       logger.warn(
@@ -1419,7 +1556,11 @@ export default defineBackground(() => {
       const password = await instanceManager.getDecryptedPassword(
         payload.instanceId,
       );
-      return { success: true, data: { available: password !== null } };
+      const available = password !== null;
+      logger.info(
+        `[Background] CHECK_PASSWORD_AVAILABLE for ${payload.instanceId}: available=${available}`,
+      );
+      return { success: true, data: { available } };
     } catch (error) {
       logger.error("[Background] Error checking password availability:", error);
       return { success: true, data: { available: false } };
@@ -1483,8 +1624,19 @@ export default defineBackground(() => {
 
     // If no instances, fall back to legacy auth manager
     if (config.instances.length === 0) {
+      // Circuit breaker check for legacy mode
+      if (isLegacyCircuitBreakerOpen()) {
+        logger.debug(
+          "[PiSentinel] Skipping legacy keepalive - auth circuit breaker open",
+        );
+        return;
+      }
+
       const renewalSuccess = await authManager.renewSessionBeforeExpiry();
-      if (renewalSuccess) return;
+      if (renewalSuccess) {
+        resetLegacyAuthFailures();
+        return;
+      }
 
       const sessionValid = await authManager.handleKeepalive();
       if (!sessionValid) {
@@ -1492,9 +1644,14 @@ export default defineBackground(() => {
         if (password !== null) {
           const result = await authManager.authenticate(password);
           if (result.success) {
+            resetLegacyAuthFailures();
             store.setState({ isConnected: true });
             return;
           }
+          consecutiveAuthFailures++;
+          logger.warn(
+            `[PiSentinel] Legacy keepalive auth failed (${consecutiveAuthFailures}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
+          );
         }
         store.setState({ isConnected: false });
         await notificationService.showConnectionError("Session expired");
@@ -1505,6 +1662,14 @@ export default defineBackground(() => {
     // Iterate through all instances
     for (const instance of config.instances) {
       try {
+        // Circuit breaker check for this instance
+        if (isInstanceCircuitBreakerOpen(instance.id)) {
+          logger.debug(
+            `[PiSentinel] Skipping keepalive for instance ${instance.id} - auth circuit breaker open`,
+          );
+          continue;
+        }
+
         // SEC-3: Use encrypted session retrieval
         const session = await getInstanceSession(instance.id);
 
@@ -1522,7 +1687,8 @@ export default defineBackground(() => {
           // Session still valid with good margin, just ping to extend
           const result = await client.getStats();
           if (result.success) {
-            // Update session expiry
+            // Update session expiry - also reset failures since session is working
+            resetInstanceAuthFailures(instance.id);
             await storeInstanceSession(
               instance.id,
               session.sid,
@@ -1561,6 +1727,7 @@ export default defineBackground(() => {
 
           const result = await client.authenticate(password);
           if (result.success && result.data?.session) {
+            resetInstanceAuthFailures(instance.id);
             await storeInstanceSession(
               instance.id,
               result.data.session.sid,
@@ -1570,6 +1737,8 @@ export default defineBackground(() => {
             store.updateInstanceState(instance.id, { isConnected: true });
             continue;
           }
+          // Auth failed - increment failure counter
+          incrementInstanceAuthFailures(instance.id);
         }
 
         // Session expired and couldn't be renewed
@@ -1632,28 +1801,32 @@ export default defineBackground(() => {
   // Register message listener at top level (required for event pages)
   logger.debug("[Background] Registering message listener");
 
-  // Use Chrome/Firefox compatible sendResponse pattern
+  // Use Promise-based pattern (recommended for webextension-polyfill in Firefox MV3)
+  // Returning a Promise directly is more reliable than sendResponse callback
   browser.runtime.onMessage.addListener(
-    (
-      message: unknown,
-      sender: browser.Runtime.MessageSender,
-      sendResponse: (response: any) => void,
-    ) => {
-      logger.debug("[Background] Listener received message:", message);
+    (message: unknown, sender: browser.Runtime.MessageSender) => {
+      logger.info(
+        "[Background] Listener received message:",
+        (message as Message)?.type,
+        "from:",
+        sender.url?.substring(0, 50),
+      );
 
-      // Handle async with sendResponse callback
-      handleMessage(message as Message, sender)
+      // Return Promise directly - webextension-polyfill handles this correctly
+      return handleMessage(message as Message, sender)
         .then((response) => {
-          logger.debug("[Background] Calling sendResponse with:", response);
-          sendResponse(response);
+          logger.info(
+            "[Background] Returning response for",
+            (message as Message)?.type,
+            ":",
+            JSON.stringify(response)?.substring(0, 100),
+          );
+          return response;
         })
         .catch((error) => {
           logger.error("[Background] Error handling message:", error);
-          sendResponse({ success: false, error: error.message });
+          return { success: false, error: error.message };
         });
-
-      // CRITICAL: Return true to indicate we will call sendResponse asynchronously
-      return true;
     },
   );
   logger.debug("[Background] Message listener registered");

@@ -10,6 +10,7 @@ import type {
   PiHoleInstance,
 } from "~/utils/types";
 import { sendMessage, type MessageResponse } from "~/utils/messaging";
+import { sendViaStorage } from "~/utils/storage-message";
 import { logger } from "~/utils/logger";
 import { TIMEOUTS } from "~/utils/constants";
 
@@ -148,15 +149,18 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     }
 
     try {
+      logger.debug(`[InstanceList] Sending DELETE_INSTANCE for: ${instanceId}`);
       const response = await sendMessage<void>({
         type: "DELETE_INSTANCE",
         payload: { instanceId },
       });
+      logger.debug(`[InstanceList] DELETE_INSTANCE response:`, response);
 
       if (response?.success) {
         onMessage({ type: "success", text: "Pi-hole deleted successfully" });
         await loadInstances();
       } else {
+        logger.warn(`[InstanceList] Delete failed, response:`, response);
         throw new Error(response?.error || "Failed to delete");
       }
     } catch (err) {
@@ -189,21 +193,34 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     }
 
     // Check if password is available in session/storage
-    // This fixes the bug where rememberPassword=false would always prompt,
-    // even when password was available in session storage
-    const checkResponse = await sendMessage<{ available: boolean }>({
-      type: "CHECK_PASSWORD_AVAILABLE",
-      payload: { instanceId },
-    });
+    // Uses storage-based messaging due to Firefox bug where runtime.sendMessage
+    // returns undefined for async responses from options pages
+    const checkResponse = await sendViaStorage<{ available: boolean }>(
+      "pendingCheckPasswordAvailable",
+      "checkPasswordAvailableResponse",
+      { instanceId },
+    );
+
+    logger.info(
+      `[InstanceList] CHECK_PASSWORD_AVAILABLE response:`,
+      JSON.stringify(checkResponse),
+    );
 
     if (checkResponse?.success && checkResponse.data?.available) {
       // Password available - connect without prompting
+      logger.info(
+        `[InstanceList] Password available, connecting without prompt`,
+      );
       setUseStoredPasswordForTotp(true);
       await connectInstance({ instanceId });
       return;
     }
 
     // No password available - show prompt
+    logger.info(
+      `[InstanceList] Password NOT available, showing prompt. ` +
+        `success=${checkResponse?.success}, available=${checkResponse?.data?.available}`,
+    );
     setPasswordPromptInstance(instance);
   };
 
@@ -235,11 +252,12 @@ export function InstanceList({ onMessage }: InstanceListProps) {
         payload.totp = totp;
       }
 
-      const response = await sendMessage<{ totpRequired?: boolean }>(
-        {
-          type: "CONNECT_INSTANCE",
-          payload,
-        },
+      // Use storage-based messaging due to Firefox bug where runtime.sendMessage
+      // returns undefined for async responses from options pages
+      const response = await sendViaStorage<{ totpRequired?: boolean }>(
+        "pendingConnectInstance",
+        "connectInstanceResponse",
+        payload,
         TIMEOUTS.CONNECTION_ATTEMPT,
       );
 
@@ -321,10 +339,12 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
   const handleDisconnectInstance = async (instanceId: string) => {
     try {
-      const response = await sendMessage<void>({
-        type: "DISCONNECT_INSTANCE",
-        payload: { instanceId },
-      });
+      // Use storage-based messaging due to Firefox bug
+      const response = await sendViaStorage<void>(
+        "pendingDisconnectInstance",
+        "disconnectInstanceResponse",
+        { instanceId },
+      );
 
       if (response?.success) {
         onMessage({ type: "info", text: "Disconnected from Pi-hole" });
@@ -343,10 +363,12 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
   const handleSetActiveInstance = async (instanceId: string) => {
     try {
-      const response = await sendMessage<void>({
-        type: "SET_ACTIVE_INSTANCE",
-        payload: { instanceId },
-      });
+      // Use storage-based messaging due to Firefox bug
+      const response = await sendViaStorage<void>(
+        "pendingSetActiveInstance",
+        "setActiveInstanceResponse",
+        { instanceId },
+      );
 
       if (response?.success) {
         setActiveInstanceId(instanceId);

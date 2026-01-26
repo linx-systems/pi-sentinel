@@ -86,11 +86,31 @@ background script**:
   attempt auto-connect on selection if a stored password exists.
 - Popup derives the Admin link from the active instance (or the only instance).
 - Avoid stat refresh loops: only refresh when stats are stale (cache TTL).
-- Options pages now use regular `sendMessage()` from `utils/messaging.ts` (same as
-  popup/sidebar). The previous storage-based workaround (`utils/storage-message.ts`)
-  was removed due to Firefox `storage.onChanged` listener reliability issues.
 - Popup instance switching must not call `refetch()` in `handleInstanceChange`;
   it races with background async ops. Rely on `STATE_UPDATED` broadcast.
+
+### Options Page Messaging (Firefox Bug Workaround)
+
+**CRITICAL:** Firefox has a bug where `browser.runtime.sendMessage` returns `undefined`
+for async responses when called from options pages. The background script receives and
+processes the message correctly, but Firefox closes the message port before the
+Promise resolves.
+
+**Affected operations in options page:**
+- `CHECK_PASSWORD_AVAILABLE`
+- `CONNECT_INSTANCE`
+- `DISCONNECT_INSTANCE`
+- `SET_ACTIVE_INSTANCE`
+
+**Solution:** Use `sendViaStorage()` from `utils/storage-message.ts` for these operations.
+This uses `browser.storage.local` as a communication channel:
+1. UI writes request to storage (e.g., `pendingConnectInstance`)
+2. Background listens for storage changes, processes request
+3. Background writes response to storage (e.g., `connectInstanceResponse`)
+4. UI receives response via storage change listener
+
+**Note:** Popup and sidebar can still use regular `sendMessage()` as they don't have
+this Firefox bug. Only the options page requires storage-based messaging.
 
 ### State Management
 

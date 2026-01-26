@@ -71,12 +71,7 @@ export class InstanceManager {
       return this.instancesCache;
     }
 
-    const result = await browser.storage.local.get(STORAGE_KEYS.INSTANCES);
-    const instances = result[STORAGE_KEYS.INSTANCES] as
-      | PersistedInstances
-      | undefined;
-
-    const config = instances || {
+    const defaultConfig: PersistedInstances = {
       instances: [],
       activeInstanceId: null,
       globalSettings: {
@@ -85,9 +80,23 @@ export class InstanceManager {
       },
     };
 
-    // Store in cache
-    this.instancesCache = config;
-    return config;
+    try {
+      const result = await browser.storage.local.get(STORAGE_KEYS.INSTANCES);
+      const instances = result[STORAGE_KEYS.INSTANCES] as
+        | PersistedInstances
+        | undefined;
+
+      const config = instances || defaultConfig;
+
+      // Store in cache
+      this.instancesCache = config;
+      return config;
+    } catch (error) {
+      logger.error("[InstanceManager] Failed to load instances:", error);
+      // Return default config on storage failure to keep extension functional
+      this.instancesCache = defaultConfig;
+      return defaultConfig;
+    }
   }
 
   /**
@@ -126,7 +135,15 @@ export class InstanceManager {
         masterKey,
         EXTENSION_ENTROPY,
       );
+      logger.info(
+        `[addInstance] Encrypted master key for persistent storage: ${!!encryptedMasterKey}`,
+      );
     }
+
+    logger.info(
+      `[addInstance] Creating instance with rememberPassword=${rememberPassword}, ` +
+        `hasEncryptedMasterKey=${!!encryptedMasterKey}`,
+    );
 
     const instance: PiHoleInstance = {
       id: instanceId,
@@ -189,7 +206,23 @@ export class InstanceManager {
     if (updates.password !== undefined) {
       let masterKey = this.masterKeys.get(instanceId);
 
-      // If we don't have the master key, generate a new one
+      // Try to recover master key from persistent storage if not in memory
+      if (!masterKey && instance.encryptedMasterKey) {
+        try {
+          masterKey = await encryption.decrypt(
+            instance.encryptedMasterKey,
+            EXTENSION_ENTROPY,
+          );
+          this.masterKeys.set(instanceId, masterKey);
+          await this.saveMasterKeyToSession(instanceId, masterKey);
+        } catch {
+          logger.warn(
+            `Failed to recover master key for instance: ${instanceId}`,
+          );
+        }
+      }
+
+      // If we still don't have the master key, generate a new one
       if (!masterKey) {
         masterKey = encryption.generateMasterPassword();
         this.masterKeys.set(instanceId, masterKey);
@@ -220,19 +253,41 @@ export class InstanceManager {
       updates.rememberPassword !== undefined &&
       updates.password === undefined
     ) {
-      instance.rememberPassword = updates.rememberPassword;
-
       if (updates.rememberPassword) {
         // Need to encrypt and store the master key
-        const masterKey = this.masterKeys.get(instanceId);
+        let masterKey = this.masterKeys.get(instanceId);
+
+        // Try to recover from persistent storage if not in memory
+        if (!masterKey && instance.encryptedMasterKey) {
+          try {
+            masterKey = await encryption.decrypt(
+              instance.encryptedMasterKey,
+              EXTENSION_ENTROPY,
+            );
+            this.masterKeys.set(instanceId, masterKey);
+            await this.saveMasterKeyToSession(instanceId, masterKey);
+          } catch {
+            // Ignore - will handle below
+          }
+        }
+
         if (masterKey) {
+          instance.rememberPassword = true;
           instance.encryptedMasterKey = await encryption.encrypt(
             masterKey,
             EXTENSION_ENTROPY,
           );
+        } else {
+          // Cannot enable - master key not available
+          logger.warn(
+            `Cannot enable rememberPassword for ${instanceId}: master key not available. ` +
+              `Re-enter password to enable this feature.`,
+          );
+          // Keep rememberPassword unchanged (don't set to true with null encryptedMasterKey)
         }
       } else {
-        // Clear the encrypted master key
+        // Disabling remember password
+        instance.rememberPassword = false;
         instance.encryptedMasterKey = null;
       }
     }
@@ -260,12 +315,19 @@ export class InstanceManager {
 
     // Clear master key
     this.masterKeys.delete(instanceId);
-    await browser.storage.session.remove(`masterKey_${instanceId}`);
 
-    // Clear session for this instance
-    await browser.storage.session.remove(
-      `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`,
-    );
+    // Clean up session storage (non-critical, log failures but continue)
+    try {
+      await browser.storage.session.remove(`masterKey_${instanceId}`);
+      await browser.storage.session.remove(
+        `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`,
+      );
+    } catch (error) {
+      logger.warn(
+        `[InstanceManager] Failed to clean up session storage for ${instanceId}:`,
+        error,
+      );
+    }
 
     // If deleted instance was active, switch to first available or null
     if (config.activeInstanceId === instanceId) {
@@ -335,11 +397,17 @@ export class InstanceManager {
   async getDecryptedPassword(instanceId: string): Promise<string | null> {
     const instance = await this.getInstance(instanceId);
     if (!instance?.encryptedPassword) {
+      logger.info(
+        `[getDecryptedPassword] No encryptedPassword for instance: ${instanceId}`,
+      );
       return null;
     }
 
     // Try to get master key from memory
     let masterKey = this.masterKeys.get(instanceId);
+    logger.info(
+      `[getDecryptedPassword] Memory masterKey for ${instanceId}: ${masterKey ? "found" : "not found"}`,
+    );
 
     // If not in memory, try session storage
     if (!masterKey) {
@@ -349,6 +417,13 @@ export class InstanceManager {
       masterKey = result[`masterKey_${instanceId}`] as string | undefined;
       if (masterKey) {
         this.masterKeys.set(instanceId, masterKey);
+        logger.info(
+          `[getDecryptedPassword] Session masterKey for ${instanceId}: found`,
+        );
+      } else {
+        logger.info(
+          `[getDecryptedPassword] Session masterKey for ${instanceId}: not found`,
+        );
       }
     }
 
@@ -358,6 +433,11 @@ export class InstanceManager {
       instance.rememberPassword &&
       instance.encryptedMasterKey
     ) {
+      logger.info(
+        `[getDecryptedPassword] Trying persistent storage for ${instanceId}: ` +
+          `rememberPassword=${instance.rememberPassword}, ` +
+          `hasEncryptedMasterKey=${!!instance.encryptedMasterKey}`,
+      );
       try {
         masterKey = await encryption.decrypt(
           instance.encryptedMasterKey,
@@ -365,20 +445,45 @@ export class InstanceManager {
         );
         this.masterKeys.set(instanceId, masterKey);
         await this.saveMasterKeyToSession(instanceId, masterKey);
-      } catch {
-        logger.warn(`Failed to decrypt master key for instance: ${instanceId}`);
+        logger.info(
+          `[getDecryptedPassword] Successfully decrypted masterKey from persistent storage for ${instanceId}`,
+        );
+      } catch (error) {
+        logger.warn(
+          `Failed to decrypt master key for instance: ${instanceId}`,
+          error,
+        );
         return null;
       }
+    } else if (!masterKey) {
+      logger.info(
+        `[getDecryptedPassword] Cannot use persistent storage for ${instanceId}: ` +
+          `rememberPassword=${instance.rememberPassword}, ` +
+          `hasEncryptedMasterKey=${!!instance.encryptedMasterKey}`,
+      );
     }
 
     if (!masterKey) {
+      logger.info(
+        `[getDecryptedPassword] No masterKey available for ${instanceId}`,
+      );
       return null;
     }
 
     try {
-      return await encryption.decrypt(instance.encryptedPassword, masterKey);
-    } catch {
-      logger.warn(`Failed to decrypt password for instance: ${instanceId}`);
+      const password = await encryption.decrypt(
+        instance.encryptedPassword,
+        masterKey,
+      );
+      logger.info(
+        `[getDecryptedPassword] Successfully decrypted password for ${instanceId}`,
+      );
+      return password;
+    } catch (error) {
+      logger.warn(
+        `[getDecryptedPassword] Failed to decrypt password for instance: ${instanceId}`,
+        error,
+      );
       return null;
     }
   }
