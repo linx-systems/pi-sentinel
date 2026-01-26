@@ -1,4 +1,4 @@
-import { useState, useEffect } from "preact/hooks";
+import { useState, useEffect, useRef } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { InstanceCard } from "./InstanceCard";
 import { InstanceModal } from "./InstanceModal";
@@ -9,9 +9,9 @@ import type {
   PersistedInstances,
   PiHoleInstance,
 } from "~/utils/types";
-import type { MessageResponse } from "~/utils/messaging";
-import { sendViaStorage } from "~/utils/storage-message";
+import { sendMessage, type MessageResponse } from "~/utils/messaging";
 import { logger } from "~/utils/logger";
+import { TIMEOUTS } from "~/utils/constants";
 
 interface InstanceListProps {
   onMessage: (message: {
@@ -45,34 +45,44 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   const [useStoredPasswordForTotp, setUseStoredPasswordForTotp] =
     useState(false);
 
+  const loadDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Load instances on mount
   useEffect(() => {
     loadInstances();
 
-    // Listen for state updates
+    // Listen for instance updates only (not STATE_UPDATED to avoid message storm)
+    // STATE_UPDATED fires on stats polls (~30s), which clears modal fields mid-edit.
+    // INSTANCES_UPDATED only fires when instance config actually changes.
     const handleMessage = (message: unknown) => {
-      const msg = message as { type: string; payload?: unknown };
-      if (msg.type === "STATE_UPDATED") {
-        // Reload everything to avoid stale closure issues
-        loadInstances();
+      const msg = message as { type: string };
+      if (msg.type === "INSTANCES_UPDATED") {
+        // Debounce to prevent rapid-fire reloads during quick instance operations
+        if (loadDebounceRef.current) {
+          clearTimeout(loadDebounceRef.current);
+        }
+        loadDebounceRef.current = setTimeout(() => {
+          loadDebounceRef.current = null;
+          loadInstances();
+        }, 100);
       }
     };
     browser.runtime.onMessage.addListener(handleMessage);
 
     return () => {
       browser.runtime.onMessage.removeListener(handleMessage);
+      if (loadDebounceRef.current) {
+        clearTimeout(loadDebounceRef.current);
+      }
     };
   }, []);
 
   const loadInstances = async () => {
     setIsLoading(true);
     try {
-      // Use sendViaStorage for Firefox options page compatibility
-      const response = await sendViaStorage<PersistedInstances>(
-        "pendingGetInstances",
-        "getInstancesResponse",
-        {},
-      );
+      const response = await sendMessage<PersistedInstances>({
+        type: "GET_INSTANCES",
+      });
 
       if (response?.success && response.data) {
         const newInstances = response.data.instances;
@@ -96,12 +106,10 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
     for (const instance of instanceList) {
       try {
-        // Use sendViaStorage for Firefox options page compatibility
-        const response = await sendViaStorage<InstanceState>(
-          "pendingGetInstanceState",
-          "getInstanceStateResponse",
-          { instanceId: instance.id },
-        );
+        const response = await sendMessage<InstanceState>({
+          type: "GET_INSTANCE_STATE",
+          payload: { instanceId: instance.id },
+        });
 
         if (response?.success && response.data) {
           newStates.set(instance.id, response.data);
@@ -140,11 +148,10 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     }
 
     try {
-      const response = await sendViaStorage<void>(
-        "pendingDeleteInstance",
-        "deleteInstanceResponse",
-        { instanceId },
-      );
+      const response = await sendMessage<void>({
+        type: "DELETE_INSTANCE",
+        payload: { instanceId },
+      });
 
       if (response?.success) {
         onMessage({ type: "success", text: "Pi-hole deleted successfully" });
@@ -168,23 +175,35 @@ export function InstanceList({ onMessage }: InstanceListProps) {
       return;
     }
 
+    // Reset state
     setConnectingInstanceId(instanceId);
     setTotpRequired(false);
     setPendingPassword("");
     setUseStoredPasswordForTotp(false);
     setPasswordPromptError(null);
 
+    // Passwordless instances: connect with empty password
     if (instance.passwordless) {
       await connectInstance({ instanceId, password: "" });
       return;
     }
 
-    if (instance.rememberPassword) {
+    // Check if password is available in session/storage
+    // This fixes the bug where rememberPassword=false would always prompt,
+    // even when password was available in session storage
+    const checkResponse = await sendMessage<{ available: boolean }>({
+      type: "CHECK_PASSWORD_AVAILABLE",
+      payload: { instanceId },
+    });
+
+    if (checkResponse?.success && checkResponse.data?.available) {
+      // Password available - connect without prompting
       setUseStoredPasswordForTotp(true);
       await connectInstance({ instanceId });
       return;
     }
 
+    // No password available - show prompt
     setPasswordPromptInstance(instance);
   };
 
@@ -216,10 +235,12 @@ export function InstanceList({ onMessage }: InstanceListProps) {
         payload.totp = totp;
       }
 
-      const response = await sendViaStorage<{ totpRequired?: boolean }>(
-        "pendingConnectInstance",
-        "connectInstanceResponse",
-        payload,
+      const response = await sendMessage<{ totpRequired?: boolean }>(
+        {
+          type: "CONNECT_INSTANCE",
+          payload,
+        },
+        TIMEOUTS.CONNECTION_ATTEMPT,
       );
 
       if (response?.success) {
@@ -241,7 +262,12 @@ export function InstanceList({ onMessage }: InstanceListProps) {
       }
     } catch (err) {
       logger.error("Failed to connect instance:", err);
-      const message = err instanceof Error ? err.message : "Failed to connect";
+      let message = err instanceof Error ? err.message : "Failed to connect";
+
+      // Improve timeout error message
+      if (message.includes("timeout") || message.includes("Timeout")) {
+        message = "Connection timed out. Check if your Pi-hole is reachable.";
+      }
 
       if (fromPrompt) {
         setPasswordPromptError(message);
@@ -295,11 +321,10 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
   const handleDisconnectInstance = async (instanceId: string) => {
     try {
-      const response = await sendViaStorage<void>(
-        "pendingDisconnectInstance",
-        "disconnectInstanceResponse",
-        { instanceId },
-      );
+      const response = await sendMessage<void>({
+        type: "DISCONNECT_INSTANCE",
+        payload: { instanceId },
+      });
 
       if (response?.success) {
         onMessage({ type: "info", text: "Disconnected from Pi-hole" });
@@ -318,11 +343,10 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
   const handleSetActiveInstance = async (instanceId: string) => {
     try {
-      const response = await sendViaStorage<void>(
-        "pendingSetActiveInstance",
-        "setActiveInstanceResponse",
-        { instanceId },
-      );
+      const response = await sendMessage<void>({
+        type: "SET_ACTIVE_INSTANCE",
+        payload: { instanceId },
+      });
 
       if (response?.success) {
         setActiveInstanceId(instanceId);

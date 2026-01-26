@@ -41,10 +41,18 @@ export function TotpInput({
         Two-Factor Authentication
       </h2>
 
-      <p style={{ color: "#888", marginBottom: "16px" }}>
-        Your Pi-hole has 2FA enabled. Please enter the code from your
-        authenticator app.
-      </p>
+      <div class="totp-explanation">
+        <p style={{ color: "#888", marginBottom: "8px" }}>
+          Your Pi-hole has Two-Factor Authentication enabled.
+        </p>
+        <p style={{ color: "#aaa", fontSize: "13px", marginBottom: "8px" }}>
+          Open your authenticator app (like Google Authenticator, Authy, or
+          1Password) and enter the 6-digit code shown for your Pi-hole.
+        </p>
+        <p style={{ color: "#666", fontSize: "12px", marginBottom: "16px" }}>
+          This code changes every 30 seconds.
+        </p>
+      </div>
 
       <form onSubmit={handleSubmit}>
         <div class="totp-section">

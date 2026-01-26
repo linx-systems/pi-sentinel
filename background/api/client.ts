@@ -104,10 +104,13 @@ export class PiholeApiClient {
 
   /**
    * Logout and invalidate session.
+   * Only clears local session if server-side logout succeeds.
    */
   async logout(): Promise<ApiResult<void>> {
     const result = await this.request<void>("DELETE", ENDPOINTS.AUTH);
-    this.clearSession();
+    if (result.success) {
+      this.clearSession();
+    }
     return result;
   }
 

@@ -64,6 +64,7 @@ export const TIMEOUTS = {
   DEBOUNCE_SEARCH: 300, // Search input debounce
   RETRY_DELAY_BASE: 1000, // Base delay for exponential backoff
   RETRY_DELAY_MAX: 10000, // Maximum retry delay
+  CONNECTION_ATTEMPT: 15000, // Connection attempt timeout (prevents infinite loading)
 } as const;
 
 // Error Messages

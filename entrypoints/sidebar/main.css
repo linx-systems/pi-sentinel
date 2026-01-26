@@ -812,3 +812,47 @@ body {
   color: #888;
   flex-shrink: 0;
 }
+
+/* Switching state */
+.instance-selector-trigger.switching {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.instance-selector-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: instance-spinner 0.8s linear infinite;
+}
+
+@keyframes instance-spinner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Error state */
+.instance-selector-error {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: rgba(220, 53, 69, 0.9);
+  color: #fff;
+  font-size: 11px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 1001;
+}
+
+.instance-selector.has-error {
+  position: relative;
+}

@@ -42,7 +42,8 @@ export type MessageType =
   | "CONNECT_INSTANCE"
   | "DISCONNECT_INSTANCE"
   | "GET_INSTANCE_STATE"
-  | "GET_AGGREGATED_STATE";
+  | "GET_AGGREGATED_STATE"
+  | "CHECK_PASSWORD_AVAILABLE";
 
 // Message Payloads
 export interface AuthenticatePayload {
@@ -116,6 +117,10 @@ export interface GetInstanceStatePayload {
   instanceId: string;
 }
 
+export interface CheckPasswordAvailablePayload {
+  instanceId: string;
+}
+
 // Response Types
 export interface MessageResponse<T = unknown> {
   success: boolean;
@@ -153,7 +158,11 @@ export type Message =
   | { type: "CONNECT_INSTANCE"; payload: ConnectInstancePayload }
   | { type: "DISCONNECT_INSTANCE"; payload: DisconnectInstancePayload }
   | { type: "GET_INSTANCE_STATE"; payload: GetInstanceStatePayload }
-  | { type: "GET_AGGREGATED_STATE" };
+  | { type: "GET_AGGREGATED_STATE" }
+  | {
+      type: "CHECK_PASSWORD_AVAILABLE";
+      payload: CheckPasswordAvailablePayload;
+    };
 
 // Serializable version of TabDomainData for messaging
 export interface SerializableTabDomains {

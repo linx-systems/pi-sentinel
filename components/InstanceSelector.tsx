@@ -28,9 +28,12 @@ export function InstanceSelector({
   const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSwitching, setIsSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const isSelectingRef = useRef(false);
   const loadDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load instances on mount
   useEffect(() => {
@@ -58,6 +61,9 @@ export function InstanceSelector({
       browser.runtime.onMessage.removeListener(handleMessage);
       if (loadDebounceRef.current) {
         clearTimeout(loadDebounceRef.current);
+      }
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current);
       }
     };
   }, []);
@@ -123,7 +129,7 @@ export function InstanceSelector({
 
   const handleSelectInstance = async (instanceId: string | null) => {
     // Guard against concurrent calls (e.g., double-clicks or re-renders during async)
-    if (isSelectingRef.current) {
+    if (isSelectingRef.current || isSwitching) {
       return;
     }
     // Skip if already on this instance
@@ -132,7 +138,17 @@ export function InstanceSelector({
       return;
     }
 
+    // Clear any previous error
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+    setSwitchError(null);
+
     isSelectingRef.current = true;
+    setIsSwitching(true);
+    setIsOpen(false);
+
     try {
       const response = (await browser.runtime.sendMessage({
         type: "SET_ACTIVE_INSTANCE",
@@ -141,13 +157,27 @@ export function InstanceSelector({
 
       if (response?.success) {
         setActiveInstanceId(instanceId);
-        setIsOpen(false);
         onInstanceChange?.(instanceId);
+      } else {
+        const errorMsg = response?.error || "Failed to switch instance";
+        setSwitchError(errorMsg);
+        // Auto-clear error after 3 seconds
+        errorTimeoutRef.current = setTimeout(() => {
+          setSwitchError(null);
+          errorTimeoutRef.current = null;
+        }, 3000);
       }
     } catch (err) {
       logger.error("Failed to set active instance:", err);
+      setSwitchError("Failed to switch instance");
+      // Auto-clear error after 3 seconds
+      errorTimeoutRef.current = setTimeout(() => {
+        setSwitchError(null);
+        errorTimeoutRef.current = null;
+      }, 3000);
     } finally {
       isSelectingRef.current = false;
+      setIsSwitching(false);
     }
   };
 
@@ -182,17 +212,28 @@ export function InstanceSelector({
 
   return (
     <div
-      class={`instance-selector ${compact ? "compact" : ""}`}
+      class={`instance-selector ${compact ? "compact" : ""} ${switchError ? "has-error" : ""}`}
       ref={dropdownRef}
     >
       <button
-        class="instance-selector-trigger"
-        onClick={() => setIsOpen(!isOpen)}
+        class={`instance-selector-trigger ${isSwitching ? "switching" : ""}`}
+        onClick={() => !isSwitching && setIsOpen(!isOpen)}
         title="Switch Pi-hole instance"
+        disabled={isSwitching}
       >
-        <span class="instance-selector-label">{currentLabel}</span>
-        <ChevronIcon isOpen={isOpen} />
+        {isSwitching ? (
+          <span class="instance-selector-spinner" />
+        ) : (
+          <span class="instance-selector-label">{currentLabel}</span>
+        )}
+        {!isSwitching && <ChevronIcon isOpen={isOpen} />}
       </button>
+
+      {switchError && (
+        <div class="instance-selector-error" title={switchError}>
+          {switchError}
+        </div>
+      )}
 
       {isOpen && (
         <div class="instance-selector-dropdown">

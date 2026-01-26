@@ -217,6 +217,15 @@ export class AuthManager {
       return { success: false, error: "Pi-hole URL not configured" };
     }
 
+    // Invalidate old session before creating new one to prevent ghost sessions
+    if (apiClient.hasSession()) {
+      try {
+        await apiClient.logout();
+      } catch {
+        logger.debug("Failed to logout before re-authentication");
+      }
+    }
+
     const result = await apiClient.authenticate(password, totp);
 
     if (!result.success) {
@@ -396,6 +405,16 @@ export class AuthManager {
     const password = await this.getDecryptedPassword();
     if (password === null) {
       return false;
+    }
+
+    // Invalidate old session before creating new one to prevent ghost sessions
+    try {
+      await apiClient.logout();
+    } catch {
+      // Continue with re-auth even if logout fails - the old session will expire naturally
+      logger.debug(
+        "Failed to logout before session renewal, continuing with re-auth",
+      );
     }
 
     const result = await this.authenticate(password);

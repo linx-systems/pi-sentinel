@@ -65,6 +65,12 @@ export default defineBackground(() => {
   let instanceSessionEncryptionKey: string | null = null;
 
   /**
+   * Flag to prevent duplicate initialization.
+   * On extension reload, both onInstalled and immediate init can fire.
+   */
+  let initializationPromise: Promise<void> | null = null;
+
+  /**
    * Flag to prevent stats refresh during instance switch.
    * Set of instance IDs currently being transitioned.
    */
@@ -178,6 +184,19 @@ export default defineBackground(() => {
   // ===== Initialization =====
 
   async function initialize(): Promise<void> {
+    // Prevent duplicate initialization (e.g., onInstalled + immediate init on reload)
+    if (initializationPromise) {
+      logger.debug(
+        "[PiSentinel] Initialization already in progress, waiting...",
+      );
+      return initializationPromise;
+    }
+
+    initializationPromise = doInitialize();
+    return initializationPromise;
+  }
+
+  async function doInitialize(): Promise<void> {
     try {
       logger.info("[PiSentinel] Starting background script initialization");
 
@@ -201,6 +220,7 @@ export default defineBackground(() => {
       apiClient.setAuthRequiredHandler(async () => {
         const password = await authManager.getDecryptedPassword();
         if (password !== null) {
+          // authManager.authenticate already handles logout-before-auth
           const result = await authManager.authenticate(password);
           return result.success;
         }
@@ -267,6 +287,14 @@ export default defineBackground(() => {
             instance.id,
           );
           if (password !== null) {
+            // Logout first to prevent ghost sessions
+            if (client.hasSession()) {
+              try {
+                await client.logout();
+              } catch {
+                // Continue with re-auth
+              }
+            }
             const result = await client.authenticate(password);
             return result.success;
           }
@@ -288,6 +316,9 @@ export default defineBackground(() => {
             instance.id,
           );
           if (password !== null) {
+            // Note: client.hasSession() is false here (fresh start), but Pi-hole
+            // might have old sessions from previous browser sessions that we can't
+            // invalidate since we don't have the session ID. Those will expire naturally.
             const result = await client.authenticate(password);
             if (result.success && result.data?.session) {
               // Store session
@@ -484,6 +515,8 @@ export default defineBackground(() => {
       handleDisconnectInstance(payload.instanceId),
     GET_INSTANCE_STATE: (payload) => handleGetInstanceState(payload.instanceId),
     GET_AGGREGATED_STATE: () => handleGetAggregatedState(),
+    CHECK_PASSWORD_AVAILABLE: (payload) =>
+      handleCheckPasswordAvailable(payload),
   };
 
   async function handleMessage(
@@ -994,6 +1027,14 @@ export default defineBackground(() => {
           instance.id,
         );
         if (password !== null) {
+          // Logout first to prevent ghost sessions
+          if (client.hasSession()) {
+            try {
+              await client.logout();
+            } catch {
+              // Continue with re-auth
+            }
+          }
           const result = await client.authenticate(password);
           return result.success;
         }
@@ -1171,6 +1212,23 @@ export default defineBackground(() => {
         return { success: false, error: "Instance not found" };
       }
 
+      // Skip if already connected and no new credentials provided
+      // This prevents duplicate sessions from race conditions (e.g., init + UI connect)
+      const currentState = store.getInstanceState(instance.id);
+      const session = await getInstanceSession(instance.id);
+      if (
+        currentState?.isConnected &&
+        session &&
+        session.expiresAt > Date.now() &&
+        payload.password === undefined &&
+        payload.totp === undefined
+      ) {
+        logger.debug(
+          `[PiSentinel] Instance ${instance.id} already connected, skipping re-auth`,
+        );
+        return { success: true };
+      }
+
       // Get or create API client for this instance
       const client = apiClientManager.configureClient(
         instance.id,
@@ -1191,6 +1249,17 @@ export default defineBackground(() => {
           totpRequired: false,
         });
         return { success: false, error: errorMessage };
+      }
+
+      // Invalidate old session before creating new one to prevent ghost sessions
+      if (client.hasSession()) {
+        try {
+          await client.logout();
+        } catch {
+          logger.debug(
+            `[PiSentinel] Failed to logout before connect for ${instance.id}`,
+          );
+        }
       }
 
       // Authenticate
@@ -1259,30 +1328,47 @@ export default defineBackground(() => {
   async function handleDisconnectInstance(
     instanceId: string,
   ): Promise<MessageResponse<void>> {
-    try {
-      const client = apiClientManager.getClient(instanceId);
+    const MAX_RETRIES = 3;
+    let lastError: Error | null = null;
+    let logoutSucceeded = false;
 
-      // Logout from Pi-hole
-      await client.logout();
+    const client = apiClientManager.getClient(instanceId);
 
-      // Clear session storage
-      const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
-      await browser.storage.session.remove(sessionKey);
-
-      // Reset instance state
-      store.resetInstanceState(instanceId);
-
-      return { success: true };
-    } catch (error) {
-      logger.error("[Background] Error disconnecting instance:", error);
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to disconnect instance",
-      };
+    // Retry logout with exponential backoff
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const result = await client.logout();
+        if (result.success) {
+          logoutSucceeded = true;
+          break;
+        }
+        // Retry on failure
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
+        }
+      }
     }
+
+    // Always clear local state - user wants to disconnect
+    const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
+    await browser.storage.session.remove(sessionKey);
+    store.resetInstanceState(instanceId);
+
+    if (!logoutSucceeded) {
+      logger.warn(
+        `[Background] Logout may have failed after ${MAX_RETRIES} attempts for ${instanceId}`,
+        lastError,
+      );
+      // Still return success since local state is cleared
+      // The server-side session will expire naturally
+    }
+
+    return { success: true };
   }
 
   function handleGetInstanceState(
@@ -1319,6 +1405,24 @@ export default defineBackground(() => {
             ? error.message
             : "Failed to get aggregated state",
       };
+    }
+  }
+
+  /**
+   * Check if a password is available for an instance.
+   * Returns true if the password is stored in session or can be decrypted from storage.
+   */
+  async function handleCheckPasswordAvailable(payload: {
+    instanceId: string;
+  }): Promise<MessageResponse<{ available: boolean }>> {
+    try {
+      const password = await instanceManager.getDecryptedPassword(
+        payload.instanceId,
+      );
+      return { success: true, data: { available: password !== null } };
+    } catch (error) {
+      logger.error("[Background] Error checking password availability:", error);
+      return { success: true, data: { available: false } };
     }
   }
 
@@ -1445,6 +1549,16 @@ export default defineBackground(() => {
           instance.id,
         );
         if (password !== null) {
+          // Invalidate old session before creating new one to prevent ghost sessions
+          try {
+            await client.logout();
+          } catch {
+            // Continue with re-auth even if logout fails
+            logger.debug(
+              `[PiSentinel] Failed to logout before session renewal for ${instance.id}`,
+            );
+          }
+
           const result = await client.authenticate(password);
           if (result.success && result.data?.session) {
             await storeInstanceSession(
@@ -1625,21 +1739,27 @@ export default defineBackground(() => {
       responseKey: "getInstanceStateResponse",
       handler: (payload) => handleGetInstanceState(payload.instanceId),
     },
+    pendingCheckPasswordAvailable: {
+      responseKey: "checkPasswordAvailableResponse",
+      handler: (payload) => handleCheckPasswordAvailable(payload),
+    },
   };
 
   // Generic storage request handler
   browser.storage.onChanged.addListener(async (changes, areaName) => {
+    logger.debug(
+      `[Background] Storage changed: area=${areaName}, keys=${Object.keys(changes).join(", ")}`,
+    );
     if (areaName !== "local") return;
 
     for (const [requestKey, config] of Object.entries(storageRequests)) {
       if (changes[requestKey]?.newValue) {
         const payload = changes[requestKey].newValue;
-        logger.debug(`[Background] Processing storage request: ${requestKey}`);
+        logger.info(`[Background] Processing storage request: ${requestKey}`);
 
         try {
           const response = await config.handler(payload);
           await browser.storage.local.set({ [config.responseKey]: response });
-          await browser.storage.local.remove(requestKey);
           logger.debug(`[Background] ${requestKey} processed successfully`);
         } catch (error) {
           logger.error(`[Background] Error processing ${requestKey}:`, error);
@@ -1652,6 +1772,9 @@ export default defineBackground(() => {
                   : ERROR_MESSAGES.UNKNOWN_ERROR,
             },
           });
+        } finally {
+          // Always remove the pending request key to prevent stuck requests
+          await browser.storage.local.remove(requestKey);
         }
       }
     }

@@ -45,6 +45,10 @@ class StateStore {
   // Mutex prevents race conditions during concurrent state updates
   private updateLock: Promise<void> = Promise.resolve();
 
+  // Debounce timer for "All" mode broadcasts to batch parallel instance updates
+  private broadcastDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly BROADCAST_DEBOUNCE_MS = 150;
+
   constructor() {
     this.state = this.getInitialState();
   }
@@ -124,9 +128,19 @@ class StateStore {
           totpRequired: false,
         };
       }
+
+      // Instances exist but none connected - return explicit disconnected state
+      // Don't fall through to legacy state which may have stale isConnected value
+      return {
+        ...this.state,
+        isConnected: false,
+        connectionError: "All instances disconnected",
+        stats: null,
+        totpRequired: false,
+      };
     }
 
-    // Fallback to legacy state
+    // Fallback to legacy state (only when no instances configured at all)
     return { ...this.state };
   }
 
@@ -299,11 +313,9 @@ class StateStore {
         logger.debug("Failed to broadcast state update:", error);
       });
     } else if (this.activeInstanceId === null) {
-      // In "All" mode, broadcast aggregated state when any instance updates
-      this.notifyListeners();
-      this.broadcastStateUpdate().catch((error) => {
-        logger.debug("Failed to broadcast state update:", error);
-      });
+      // In "All" mode, debounce broadcasts to batch parallel instance updates
+      // This prevents rapid-fire STATE_UPDATED messages during concurrent stats refresh
+      this.debouncedBroadcast();
     }
   }
 
@@ -694,6 +706,35 @@ class StateStore {
         );
       }
     });
+  }
+
+  /**
+   * Debounced broadcast for "All" mode to batch parallel instance updates.
+   * Prevents rapid-fire STATE_UPDATED messages during concurrent stats refresh.
+   */
+  private debouncedBroadcast(): void {
+    if (this.broadcastDebounceTimer !== null) {
+      clearTimeout(this.broadcastDebounceTimer);
+    }
+
+    this.broadcastDebounceTimer = setTimeout(() => {
+      this.broadcastDebounceTimer = null;
+      this.notifyListeners();
+      this.broadcastStateUpdate().catch((error) => {
+        logger.debug("Failed to broadcast state update:", error);
+      });
+    }, this.BROADCAST_DEBOUNCE_MS);
+  }
+
+  /**
+   * Clean up resources (timers, listeners).
+   */
+  destroy(): void {
+    if (this.broadcastDebounceTimer !== null) {
+      clearTimeout(this.broadcastDebounceTimer);
+      this.broadcastDebounceTimer = null;
+    }
+    this.listeners.clear();
   }
 
   /**

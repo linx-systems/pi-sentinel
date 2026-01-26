@@ -1,8 +1,7 @@
 import { useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { logger } from "~/utils/logger";
-import type { MessageResponse } from "~/utils/messaging";
-import { sendViaStorage } from "~/utils/storage-message";
+import { sendMessage } from "~/utils/messaging";
 
 interface ServerConfigProps {
   onSave: (
@@ -35,13 +34,11 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
         testUrl = `http://${testUrl}`;
       }
 
-      // Use storage-based communication helper
-      logger.debug("[ServerConfig] Testing connection via storage");
-      const response = await sendViaStorage<void>(
-        "pendingTestConnection",
-        "testConnectionResponse",
-        { url: testUrl },
-      );
+      logger.debug("[ServerConfig] Testing connection");
+      const response = await sendMessage<void>({
+        type: "TEST_CONNECTION",
+        payload: { url: testUrl },
+      });
 
       if (response.success) {
         setTestStatus("success");
@@ -147,8 +144,7 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
             <span class="checkbox-text">Remember Password</span>
           </label>
           <p class="hint">
-            Stay logged in across browser restarts. Password is encrypted but
-            stored locally. Disable on shared computers.
+            Stay logged in across browser restarts. Disable on shared computers.
             <br />
             <strong>Note:</strong> Does not work with TOTP 2FA. Use an app
             password instead.

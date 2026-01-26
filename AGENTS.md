@@ -13,8 +13,9 @@ Notes for agents working in this repo (recent findings).
 - Instance selector "All" option is now shown whenever 2+ instances are
   configured (not based on connected count) and auto-connects on selection if a
   stored password exists.
-- Options pages use storage-based messaging (`utils/storage-message.ts`) due to
-  unreliable `runtime.sendMessage` responses in Firefox options pages.
+- Options pages now use regular `sendMessage()` from `utils/messaging.ts` (same as
+  popup/sidebar). Storage-based messaging was removed because Firefox's
+  `storage.onChanged` listener wasn't firing reliably, causing timeouts.
 - `useExtensionState` retries `GET_STATE` on transient "background unreachable"
   errors and clears errors when a `STATE_UPDATED` message arrives.
 - Popup `handleInstanceChange` should NOT call `refetch()` - it races with

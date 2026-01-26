@@ -1,6 +1,6 @@
 import { useState, useEffect } from "preact/hooks";
 import type { PiHoleInstance } from "~/utils/types";
-import { sendViaStorage } from "~/utils/storage-message";
+import { sendMessage } from "~/utils/messaging";
 import { logger } from "~/utils/logger";
 
 interface InstanceModalProps {
@@ -58,11 +58,10 @@ export function InstanceModal({
         testUrl = `http://${testUrl}`;
       }
 
-      const response = await sendViaStorage<void>(
-        "pendingTestConnection",
-        "testConnectionResponse",
-        { url: testUrl },
-      );
+      const response = await sendMessage<void>({
+        type: "TEST_CONNECTION",
+        payload: { url: testUrl },
+      });
 
       if (response.success) {
         setTestStatus("success");
@@ -96,17 +95,16 @@ export function InstanceModal({
           : password.length > 0
             ? password
             : undefined;
-        const response = await sendViaStorage<unknown>(
-          "pendingUpdateInstance",
-          "updateInstanceResponse",
-          {
+        const response = await sendMessage<unknown>({
+          type: "UPDATE_INSTANCE",
+          payload: {
             instanceId: instance.id,
             name: name || null,
             piholeUrl: saveUrl,
             password: passwordToSend, // Only send if provided or cleared
             rememberPassword,
           },
-        );
+        });
 
         if (!response.success) {
           throw new Error(response.error || "Failed to update instance");
@@ -114,16 +112,15 @@ export function InstanceModal({
       } else {
         // Add new instance
         const passwordToSend = noPassword ? "" : password;
-        const response = await sendViaStorage<unknown>(
-          "pendingAddInstance",
-          "addInstanceResponse",
-          {
+        const response = await sendMessage<unknown>({
+          type: "ADD_INSTANCE",
+          payload: {
             name: name || null,
             piholeUrl: saveUrl,
             password: passwordToSend,
             rememberPassword,
           },
-        );
+        });
 
         if (!response.success) {
           throw new Error(response.error || "Failed to add instance");
@@ -282,8 +279,8 @@ export function InstanceModal({
                     <span class="checkbox-text">Remember Password</span>
                   </label>
                   <p class="hint">
-                    Stay logged in across browser restarts. Password is
-                    encrypted but stored locally. Disable on shared computers.
+                    Stay logged in across browser restarts. Disable on shared
+                    computers.
                     <br />
                     <strong>Note:</strong> Does not work with TOTP 2FA. Use an
                     app password instead.

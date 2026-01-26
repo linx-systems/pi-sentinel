@@ -86,8 +86,9 @@ background script**:
   attempt auto-connect on selection if a stored password exists.
 - Popup derives the Admin link from the active instance (or the only instance).
 - Avoid stat refresh loops: only refresh when stats are stale (cache TTL).
-- Options pages use storage-based messaging (`utils/storage-message.ts`) because
-  `runtime.sendMessage` responses can be unreliable in Firefox options pages.
+- Options pages now use regular `sendMessage()` from `utils/messaging.ts` (same as
+  popup/sidebar). The previous storage-based workaround (`utils/storage-message.ts`)
+  was removed due to Firefox `storage.onChanged` listener reliability issues.
 - Popup instance switching must not call `refetch()` in `handleInstanceChange`;
   it races with background async ops. Rely on `STATE_UPDATED` broadcast.
 

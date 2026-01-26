@@ -53,6 +53,13 @@ export function PasswordPromptModal({
 
         <form onSubmit={handleSubmit}>
           <div class="modal-body">
+            <p
+              class="modal-url"
+              style={{ color: "#888", fontSize: "13px", marginBottom: "12px" }}
+            >
+              {instance.piholeUrl}
+            </p>
+
             {error && (
               <div class="error-message">
                 <ErrorIcon />
@@ -61,12 +68,23 @@ export function PasswordPromptModal({
             )}
 
             <p class="modal-description">
-              This instance does not store your password. Enter it to connect,
-              or leave it blank if there's no password.
+              Enter your Pi-hole password to connect. If your Pi-hole doesn't
+              have a password configured, leave it blank.
             </p>
 
             <div class="form-group">
-              <label for="connect-password">Pi-hole Password (optional)</label>
+              <label for="connect-password">
+                Pi-hole Password
+                <span
+                  style={{
+                    color: "#888",
+                    fontWeight: "normal",
+                    marginLeft: "4px",
+                  }}
+                >
+                  (leave blank if none)
+                </span>
+              </label>
               <input
                 ref={inputRef}
                 type="password"
@@ -75,7 +93,7 @@ export function PasswordPromptModal({
                 onInput={(e) =>
                   setPassword((e.target as HTMLInputElement).value)
                 }
-                placeholder="Leave blank if none"
+                placeholder="Enter password"
                 autoComplete="current-password"
                 disabled={isLoading}
               />

@@ -18,28 +18,28 @@ body {
 #app {
   max-width: 700px;
   margin: 0 auto;
-  padding: 32px 24px;
+  padding: 24px 24px;
 }
 
 /* Header */
 .header {
   text-align: center;
-  margin-bottom: 32px;
+  margin-bottom: 24px;
 }
 
 .header h1 {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 600;
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .header .logo {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
 }
 
 .header .subtitle {
@@ -67,7 +67,7 @@ body {
 
 /* Form */
 .form-group {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .form-group:last-child {
@@ -313,7 +313,7 @@ body {
   text-align: center;
   color: #666;
   font-size: 12px;
-  margin-top: 32px;
+  margin-top: 24px;
 }
 
 .footer a {
@@ -350,14 +350,14 @@ body {
 .instance-cards {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 /* ===== Instance Card ===== */
 .instance-card {
   background: #1a1a2e;
   border-radius: 12px;
-  padding: 20px;
+  padding: 16px;
   position: relative;
   border: 1px solid #2d2d44;
   transition: border-color 0.2s;
@@ -375,7 +375,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .instance-info {
@@ -454,11 +454,11 @@ body {
 .instance-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  gap: 10px;
   background: #252538;
   border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 16px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
 }
 
 .stat-item {
@@ -467,13 +467,13 @@ body {
 
 .stat-value {
   display: block;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
   color: #fff;
 }
 
 .stat-label {
-  font-size: 11px;
+  font-size: 10px;
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -481,7 +481,7 @@ body {
 
 .instance-card-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -501,7 +501,7 @@ body {
 /* ===== Small Buttons ===== */
 .btn-small {
   padding: 6px 12px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .btn-icon {
@@ -514,7 +514,7 @@ body {
 /* ===== Empty State ===== */
 .empty-state {
   text-align: center;
-  padding: 48px 24px;
+  padding: 32px 24px;
   background: #1a1a2e;
   border-radius: 12px;
   border: 1px dashed #3d3d54;
@@ -566,7 +566,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
+  padding: 18px 22px;
   border-bottom: 1px solid #2d2d44;
 }
 
@@ -598,7 +598,7 @@ body {
 }
 
 .modal-body {
-  padding: 24px;
+  padding: 20px;
 }
 
 .modal-description {
@@ -623,7 +623,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
+  padding: 14px 22px;
   border-top: 1px solid #2d2d44;
   gap: 12px;
 }
