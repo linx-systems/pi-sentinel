@@ -108,6 +108,12 @@ export function DomainList({
               );
           }
         }
+      })
+      .catch((error) => {
+        logger.error(
+          "[DomainList] Failed to load settings from storage:",
+          error,
+        );
       });
   }, []);
 
@@ -121,7 +127,15 @@ export function DomainList({
   // Toggle auto-search and persist to storage
   const toggleAutoSearch = async (enabled: boolean) => {
     setAutoSearchEnabled(enabled);
-    await browser.storage.local.set({ pisentinel_autoSearch: enabled });
+    try {
+      await browser.storage.local.set({ pisentinel_autoSearch: enabled });
+    } catch (error) {
+      logger.error(
+        "[DomainList] Failed to save auto-search preference:",
+        error,
+      );
+      // UI already shows the change; next session will use default (false)
+    }
   };
 
   // Auto-search logic with retry support

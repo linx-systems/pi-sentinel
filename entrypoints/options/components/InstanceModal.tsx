@@ -1,6 +1,6 @@
 import { useState, useEffect } from "preact/hooks";
 import type { PiHoleInstance } from "~/utils/types";
-import { sendMessage } from "~/utils/messaging";
+import { sendViaStorage } from "~/utils/storage-message";
 import { logger } from "~/utils/logger";
 
 interface InstanceModalProps {
@@ -58,10 +58,11 @@ export function InstanceModal({
         testUrl = `http://${testUrl}`;
       }
 
-      const response = await sendMessage<void>({
-        type: "TEST_CONNECTION",
-        payload: { url: testUrl },
-      });
+      const response = await sendViaStorage<void>(
+        "pendingTestConnection",
+        "testConnectionResponse",
+        { url: testUrl },
+      );
 
       if (response.success) {
         setTestStatus("success");
@@ -95,35 +96,37 @@ export function InstanceModal({
           : password.length > 0
             ? password
             : undefined;
-        const response = await sendMessage<unknown>({
-          type: "UPDATE_INSTANCE",
-          payload: {
+        const response = await sendViaStorage<unknown>(
+          "pendingUpdateInstance",
+          "updateInstanceResponse",
+          {
             instanceId: instance.id,
             name: name || null,
             piholeUrl: saveUrl,
             password: passwordToSend, // Only send if provided or cleared
             rememberPassword,
           },
-        });
+        );
 
-        if (!response.success) {
-          throw new Error(response.error || "Failed to update instance");
+        if (!response?.success) {
+          throw new Error(response?.error || "Failed to update instance");
         }
       } else {
         // Add new instance
         const passwordToSend = noPassword ? "" : password;
-        const response = await sendMessage<unknown>({
-          type: "ADD_INSTANCE",
-          payload: {
+        const response = await sendViaStorage<unknown>(
+          "pendingAddInstance",
+          "addInstanceResponse",
+          {
             name: name || null,
             piholeUrl: saveUrl,
             password: passwordToSend,
             rememberPassword,
           },
-        });
+        );
 
-        if (!response.success) {
-          throw new Error(response.error || "Failed to add instance");
+        if (!response?.success) {
+          throw new Error(response?.error || "Failed to add instance");
         }
       }
 

@@ -9,7 +9,7 @@ import type {
   PersistedInstances,
   PiHoleInstance,
 } from "~/utils/types";
-import { sendMessage, type MessageResponse } from "~/utils/messaging";
+import { sendMessage } from "~/utils/messaging";
 import { sendViaStorage } from "~/utils/storage-message";
 import { logger } from "~/utils/logger";
 import { TIMEOUTS } from "~/utils/constants";
@@ -47,25 +47,36 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     useState(false);
 
   const loadDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load instances on mount
   useEffect(() => {
     loadInstances();
 
-    // Listen for instance updates only (not STATE_UPDATED to avoid message storm)
-    // STATE_UPDATED fires on stats polls (~30s), which clears modal fields mid-edit.
-    // INSTANCES_UPDATED only fires when instance config actually changes.
     const handleMessage = (message: unknown) => {
       const msg = message as { type: string };
       if (msg.type === "INSTANCES_UPDATED") {
-        // Debounce to prevent rapid-fire reloads during quick instance operations
-        if (loadDebounceRef.current) {
+        // Leading-edge debounce: fire immediately on first event,
+        // then ignore subsequent events within the 100ms window
+        if (!loadDebounceRef.current) {
+          loadInstances();
+        } else {
           clearTimeout(loadDebounceRef.current);
         }
         loadDebounceRef.current = setTimeout(() => {
           loadDebounceRef.current = null;
-          loadInstances();
         }, 100);
+      }
+
+      // Listen for STATE_UPDATED to pick up connection state changes.
+      // Only refreshes states (not full loadInstances) to avoid clearing modal fields.
+      // Debounced at 3s to avoid message storms from stats polls.
+      if (msg.type === "STATE_UPDATED") {
+        if (stateDebounceRef.current) clearTimeout(stateDebounceRef.current);
+        stateDebounceRef.current = setTimeout(() => {
+          refreshInstanceStates();
+          stateDebounceRef.current = null;
+        }, 3000);
       }
     };
     browser.runtime.onMessage.addListener(handleMessage);
@@ -75,15 +86,22 @@ export function InstanceList({ onMessage }: InstanceListProps) {
       if (loadDebounceRef.current) {
         clearTimeout(loadDebounceRef.current);
       }
+      if (stateDebounceRef.current) {
+        clearTimeout(stateDebounceRef.current);
+      }
     };
   }, []);
 
   const loadInstances = async () => {
     setIsLoading(true);
     try {
-      const response = await sendMessage<PersistedInstances>({
-        type: "GET_INSTANCES",
-      });
+      // Use storage-based messaging to avoid Firefox bug where runtime.sendMessage
+      // returns undefined for async responses from options pages
+      const response = await sendViaStorage<PersistedInstances>(
+        "pendingGetInstances",
+        "getInstancesResponse",
+        {},
+      );
 
       if (response?.success && response.data) {
         const newInstances = response.data.instances;
@@ -104,14 +122,14 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     instanceList: PiHoleInstance[] = instances,
   ) => {
     const newStates = new Map<string, InstanceState>();
-
+    // Sequential: all calls use the same storage key, parallel causes request loss
     for (const instance of instanceList) {
       try {
-        const response = await sendMessage<InstanceState>({
-          type: "GET_INSTANCE_STATE",
-          payload: { instanceId: instance.id },
-        });
-
+        const response = await sendViaStorage<InstanceState>(
+          "pendingGetInstanceState",
+          "getInstanceStateResponse",
+          { instanceId: instance.id },
+        );
         if (response?.success && response.data) {
           newStates.set(instance.id, response.data);
         }
@@ -119,16 +137,15 @@ export function InstanceList({ onMessage }: InstanceListProps) {
         logger.error(`Failed to get state for instance ${instance.id}:`, err);
       }
     }
-
-    setInstanceStates(newStates);
+    // Merge: preserve existing state for instances that failed to respond
+    setInstanceStates((prev) => {
+      const merged = new Map(prev);
+      for (const [id, state] of newStates) {
+        merged.set(id, state);
+      }
+      return merged;
+    });
   };
-
-  // Refresh states when instances change
-  useEffect(() => {
-    if (instances.length > 0) {
-      refreshInstanceStates();
-    }
-  }, [instances]);
 
   const handleAddInstance = () => {
     setEditingInstance(null);
@@ -158,7 +175,6 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
       if (response?.success) {
         onMessage({ type: "success", text: "Pi-hole deleted successfully" });
-        await loadInstances();
       } else {
         logger.warn(`[InstanceList] Delete failed, response:`, response);
         throw new Error(response?.error || "Failed to delete");
@@ -262,12 +278,24 @@ export function InstanceList({ onMessage }: InstanceListProps) {
       );
 
       if (response?.success) {
+        // Optimistic UI: immediately show connected state (same pattern as disconnect)
+        setInstanceStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(instanceId);
+          if (current) {
+            next.set(instanceId, {
+              ...current,
+              isConnected: true,
+              connectionError: null,
+            });
+          }
+          return next;
+        });
         onMessage({ type: "success", text: "Connected to Pi-hole" });
         setTotpRequired(false);
         setPendingPassword("");
         setPasswordPromptInstance(null);
         setPasswordPromptError(null);
-        await loadInstances();
       } else if (response?.data?.totpRequired) {
         needsTotp = true;
         setTotpRequired(true);
@@ -348,7 +376,15 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
       if (response?.success) {
         onMessage({ type: "info", text: "Disconnected from Pi-hole" });
-        await loadInstances();
+        // Optimistic UI: immediately show disconnected state
+        setInstanceStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(instanceId);
+          if (current) {
+            next.set(instanceId, { ...current, isConnected: false });
+          }
+          return next;
+        });
       } else {
         throw new Error(response?.error || "Failed to disconnect");
       }
@@ -387,7 +423,6 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   };
 
   const handleModalSaved = () => {
-    loadInstances();
     onMessage({
       type: "success",
       text: editingInstance ? "Pi-hole updated" : "Pi-hole added",

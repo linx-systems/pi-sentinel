@@ -104,12 +104,24 @@ export class PiholeApiClient {
 
   /**
    * Logout and invalidate session.
-   * Only clears local session if server-side logout succeeds.
+   * Always clears local session. Treats 401 as success (already logged out).
    */
   async logout(): Promise<ApiResult<void>> {
-    const result = await this.request<void>("DELETE", ENDPOINTS.AUTH);
-    if (result.success) {
-      this.clearSession();
+    // Single attempt, no retries - if the server is unreachable, the session
+    // will expire naturally. Retrying network errors here just blocks the
+    // disconnect flow for seconds while the user waits.
+    const result = await this.executeRequest<void>(
+      "DELETE",
+      ENDPOINTS.AUTH,
+      undefined,
+      false,
+    );
+    // Always clear local session regardless of server response
+    // If we got 401, the session is already gone server-side
+    this.clearSession();
+    // Treat 401 as success for logout (already logged out)
+    if (!result.success && result.error?.status === 401) {
+      return { success: true };
     }
     return result;
   }

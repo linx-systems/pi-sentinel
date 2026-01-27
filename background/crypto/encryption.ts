@@ -20,23 +20,29 @@ export class CredentialEncryption {
     plaintext: string,
     masterPassword: string,
   ): Promise<EncryptedData> {
-    const encoder = new TextEncoder();
-    const salt = crypto.getRandomValues(new Uint8Array(DEFAULTS.SALT_LENGTH));
-    const iv = crypto.getRandomValues(new Uint8Array(DEFAULTS.IV_LENGTH));
+    try {
+      const encoder = new TextEncoder();
+      const salt = crypto.getRandomValues(new Uint8Array(DEFAULTS.SALT_LENGTH));
+      const iv = crypto.getRandomValues(new Uint8Array(DEFAULTS.IV_LENGTH));
 
-    const key = await this.deriveKey(masterPassword, salt);
+      const key = await this.deriveKey(masterPassword, salt);
 
-    const encrypted = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv },
-      key,
-      encoder.encode(plaintext),
-    );
+      const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        encoder.encode(plaintext),
+      );
 
-    return {
-      ciphertext: this.arrayBufferToBase64(encrypted),
-      salt: this.arrayBufferToBase64(salt.buffer as ArrayBuffer),
-      iv: this.arrayBufferToBase64(iv.buffer as ArrayBuffer),
-    };
+      return {
+        ciphertext: this.arrayBufferToBase64(encrypted),
+        salt: this.arrayBufferToBase64(salt.buffer as ArrayBuffer),
+        iv: this.arrayBufferToBase64(iv.buffer as ArrayBuffer),
+      };
+    } catch (error) {
+      throw new Error(
+        `Encryption failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
   }
 
   /**
@@ -47,19 +53,25 @@ export class CredentialEncryption {
     encryptedData: EncryptedData,
     masterPassword: string,
   ): Promise<string> {
-    const salt = this.base64ToUint8Array(encryptedData.salt);
-    const iv = this.base64ToUint8Array(encryptedData.iv);
-    const ciphertext = this.base64ToArrayBuffer(encryptedData.ciphertext);
+    try {
+      const salt = this.base64ToUint8Array(encryptedData.salt);
+      const iv = this.base64ToUint8Array(encryptedData.iv);
+      const ciphertext = this.base64ToArrayBuffer(encryptedData.ciphertext);
 
-    const key = await this.deriveKey(masterPassword, salt);
+      const key = await this.deriveKey(masterPassword, salt);
 
-    const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
-      key,
-      ciphertext,
-    );
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
+        key,
+        ciphertext,
+      );
 
-    return new TextDecoder().decode(decrypted);
+      return new TextDecoder().decode(decrypted);
+    } catch (error) {
+      throw new Error(
+        `Decryption failed: ${error instanceof Error ? error.message : "Invalid password or corrupted data"}`,
+      );
+    }
   }
 
   /**

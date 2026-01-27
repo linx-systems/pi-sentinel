@@ -39,6 +39,8 @@ export const DEFAULTS = {
   IV_LENGTH: 12,
   /** Cache TTL for stats/blocking status (ms) - reduces API calls when switching instances */
   CACHE_TTL: 30000, // 30 seconds
+  /** Max consecutive auth failures before circuit breaker opens (stops auto-retry) */
+  MAX_CONSECUTIVE_AUTH_FAILURES: 3,
 } as const;
 
 // Extension-specific entropy for encrypting the master key when "Remember Password" is enabled

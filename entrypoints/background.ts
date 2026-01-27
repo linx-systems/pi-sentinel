@@ -318,6 +318,10 @@ export default defineBackground(() => {
       logger.info("[PiSentinel] Attempting to restore sessions");
       await initializeInstances();
 
+      // Notify any open options pages that initialization is complete
+      // so they can refresh instance states (especially connection status)
+      await broadcastInstancesUpdated();
+
       // Subscribe to state changes for badge updates
       // This subscription is intentionally long-lived (extension lifetime)
       logger.info("[PiSentinel] Setting up state subscription");
@@ -1272,27 +1276,40 @@ export default defineBackground(() => {
       await instanceManager.setActiveInstance(instanceId);
       store.setActiveInstanceId(instanceId);
 
-      if (instanceId === null) {
-        const config = await instanceManager.getInstances();
-        for (const instance of config.instances) {
-          await tryAutoConnect(instance.id);
-        }
-      } else {
-        await tryAutoConnect(instanceId);
+      // Return immediately — heavy work (auto-connect, stats refresh, broadcast)
+      // runs fire-and-forget so the UI gets a fast response
+      const doPostWork = async () => {
+        try {
+          if (instanceId === null) {
+            const config = await instanceManager.getInstances();
+            for (const instance of config.instances) {
+              await tryAutoConnect(instance.id);
+            }
+          } else {
+            await tryAutoConnect(instanceId);
 
-        // If switching to a specific instance, refresh its stats if cache expired
-        if (
-          store.getInstanceState(instanceId)?.isConnected &&
-          !store.isCacheValid(instanceId)
-        ) {
-          await refreshInstanceStats(instanceId);
-        }
-      }
+            if (
+              store.getInstanceState(instanceId)?.isConnected &&
+              !store.isCacheValid(instanceId)
+            ) {
+              await refreshInstanceStats(instanceId);
+            }
+          }
 
-      await broadcastInstancesUpdated();
+          await broadcastInstancesUpdated();
+        } catch (err) {
+          logger.error("[Background] Post-setActive work failed:", err);
+        } finally {
+          transitionIds.forEach((id) => instancesInTransition.delete(id));
+        }
+      };
+      doPostWork();
+
       return { success: true };
     } catch (error) {
       logger.error("[Background] Error setting active instance:", error);
+      // Clear transition flags on error (success path clears in doPostWork)
+      transitionIds.forEach((id) => instancesInTransition.delete(id));
       return {
         success: false,
         error:
@@ -1300,9 +1317,6 @@ export default defineBackground(() => {
             ? error.message
             : "Failed to set active instance",
       };
-    } finally {
-      // BUG-4: Clear transition flags
-      transitionIds.forEach((id) => instancesInTransition.delete(id));
     }
   }
 
@@ -1437,8 +1451,10 @@ export default defineBackground(() => {
           totpRequired: false,
         });
 
-        // Fetch stats
-        await refreshInstanceStats(instance.id);
+        // Fetch stats fire-and-forget so the UI gets a fast response
+        refreshInstanceStats(instance.id).catch((err) =>
+          logger.error("[Background] Post-connect stats refresh failed:", err),
+        );
 
         return { success: true };
       }
@@ -1932,7 +1948,12 @@ export default defineBackground(() => {
 
         try {
           const response = await config.handler(payload);
-          await browser.storage.local.set({ [config.responseKey]: response });
+          await browser.storage.local.set({
+            [config.responseKey]: {
+              ...response,
+              _requestId: payload._requestId,
+            },
+          });
           logger.debug(`[Background] ${requestKey} processed successfully`);
         } catch (error) {
           logger.error(`[Background] Error processing ${requestKey}:`, error);
@@ -1943,6 +1964,7 @@ export default defineBackground(() => {
                 error instanceof Error
                   ? error.message
                   : ERROR_MESSAGES.UNKNOWN_ERROR,
+              _requestId: payload._requestId,
             },
           });
         } finally {

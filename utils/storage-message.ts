@@ -21,13 +21,26 @@ export async function sendViaStorage<T>(
   payload: any,
   timeoutMs = 10000,
 ): Promise<MessageResponse<T>> {
+  // Generate a unique requestId to match responses in parallel scenarios
+  const requestId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
   // Clear previous response to avoid stale data
-  await browser.storage.local.remove(responseKey);
+  try {
+    await browser.storage.local.remove(responseKey);
+  } catch (error) {
+    logger.error(`[StorageMessage] Failed to clear ${responseKey}:`, error);
+    return {
+      success: false,
+      error: ERROR_MESSAGES.STORAGE_ERROR,
+    };
+  }
 
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       cleanup();
-      logger.debug(`[StorageMessage] Timeout waiting for ${responseKey}`);
+      logger.debug(
+        `[StorageMessage] Timeout waiting for ${responseKey} (requestId=${requestId})`,
+      );
       resolve({
         success: false,
         error: ERROR_MESSAGES.TIMEOUT,
@@ -36,12 +49,15 @@ export async function sendViaStorage<T>(
 
     const listener = (changes: any, areaName: string) => {
       if (areaName === "local" && changes[responseKey]) {
+        const response = changes[responseKey].newValue;
+        // Only accept responses matching our requestId
+        if (response?._requestId !== requestId) return;
         cleanup();
         logger.debug(
-          `[StorageMessage] Received ${responseKey}:`,
-          changes[responseKey].newValue,
+          `[StorageMessage] Received ${responseKey} (requestId=${requestId}):`,
+          response,
         );
-        resolve(changes[responseKey].newValue);
+        resolve(response);
       }
     };
 
@@ -52,13 +68,28 @@ export async function sendViaStorage<T>(
 
     browser.storage.onChanged.addListener(listener);
 
-    // Send request
+    // Send request with requestId for response matching
     browser.storage.local
       .set({
-        [requestKey]: { ...payload, timestamp: Date.now() },
+        [requestKey]: {
+          ...payload,
+          _requestId: requestId,
+          timestamp: Date.now(),
+        },
       })
       .then(() => {
-        logger.debug(`[StorageMessage] Sent ${requestKey}:`, payload);
+        logger.debug(
+          `[StorageMessage] Sent ${requestKey} (requestId=${requestId}):`,
+          payload,
+        );
+      })
+      .catch((error) => {
+        cleanup();
+        logger.error(`[StorageMessage] Failed to send ${requestKey}:`, error);
+        resolve({
+          success: false,
+          error: ERROR_MESSAGES.STORAGE_ERROR,
+        });
       });
   });
 }
