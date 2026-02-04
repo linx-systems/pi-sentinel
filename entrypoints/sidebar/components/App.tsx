@@ -1,3 +1,7 @@
+/**
+ * Sidebar main component - displays per-tab domain list and query log.
+ * @module sidebar/App
+ */
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { DomainList } from "./DomainList";

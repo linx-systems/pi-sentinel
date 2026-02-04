@@ -11,22 +11,27 @@ blocking status, and manages domains directly from the browser.
 
 - TypeScript (strict mode)
 - Preact (lightweight React alternative)
-- esbuild (bundler)
+- WXT + Vite (bundler)
 - webextension-polyfill (cross-browser API compatibility)
 - Firefox MV3 (Manifest V3)
 
 ## Directory Layout
 
 ```
-src/
-├── background/          # Background script (entry: index.ts)
+/
+├── background/          # Background modules
 │   ├── api/             # Pi-hole v6 REST client, auth, types
 │   ├── crypto/          # PBKDF2 + AES-256-GCM encryption
 │   ├── services/        # Badge, notifications, domain tracker
 │   └── state/           # Central state store
-├── popup/               # Quick stats & blocking toggle
-├── sidebar/             # Per-tab domain list & query log
-├── options/             # Server config & 2FA setup
+├── components/          # Shared UI components
+├── entrypoints/         # WXT entry points
+│   ├── background.ts    # Background script
+│   ├── popup/           # Quick stats & blocking toggle
+│   ├── sidebar/         # Per-tab domain list & query log
+│   └── options/         # Server config & 2FA setup
+├── public/              # Static assets (icons)
+├── tests/               # Unit + E2E tests
 └── utils/               # Shared messaging, types, constants, validation
 ```
 

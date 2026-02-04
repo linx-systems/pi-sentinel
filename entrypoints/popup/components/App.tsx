@@ -1,3 +1,7 @@
+/**
+ * Popup main component - displays Pi-hole stats and blocking toggle.
+ * @module popup/App
+ */
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { StatsCard } from "./StatsCard";

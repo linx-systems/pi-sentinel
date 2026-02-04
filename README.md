@@ -9,6 +9,7 @@ and manage domains directly from your browser.
 
 - **Real-time Statistics** - View blocked queries, block rate, and active clients
 - **Blocking Control** - Toggle DNS blocking with optional timer (30s to indefinite)
+- **Multi-Instance Support** - Manage multiple Pi-hole servers from a single extension
 - **Domain Tracking** - See all domains loaded by each tab, categorized as first-party or third-party
 - **Quick Actions** - Add domains to allowlist/denylist with one click
 - **Query Log** - Browse recent DNS queries with blocked/allowed filtering
@@ -22,23 +23,21 @@ and manage domains directly from your browser.
 
 ## Requirements
 
-- Firefox 115 or later
+- Firefox 142 or later
 - Pi-hole v6 with the new REST API
 
 ## Prerequisites
 
 Before installing, ensure you have:
 
-- **Node.js** 18.x or later (LTS recommended)
-- **npm** 9.x or later (comes with Node.js)
-- **Bun** 0.7.x or later (optional, for faster build times)
+- **Node.js** 20.x or later (LTS recommended)
+- **Bun** 1.x or later
 
 Verify your installation:
 
 ```bash
-node --version  # Should output v18.x.x or higher
-npm --version   # Should output 9.x.x or higher
-bun --version   # Should output 0.7.x or higher (if installed)
+node --version  # Should output v20.x.x or higher
+bun --version   # Should output 1.x.x or higher
 ```
 
 ## Installation
@@ -80,7 +79,7 @@ Install directly from the official Firefox Add-ons store:
    - Open Firefox and navigate to `about:debugging`
    - Click "This Firefox" in the sidebar
    - Click "Load Temporary Add-on..."
-   - Select the `dist/manifest.json` file
+   - Select the `dist/firefox-mv3/manifest.json` file
 
 ## Development
 
@@ -88,9 +87,10 @@ Install directly from the official Firefox Add-ons store:
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
-npm run build:firefox
+# Development mode with hot reload
+bun run dev
 ```
 
 Then:
@@ -98,25 +98,17 @@ Then:
 - Open Firefox and navigate to `about:debugging`
 - Click "This Firefox" in the sidebar
 - Click "Load Temporary Add-on..."
-- Select the `dist/manifest.json` file
+- Select the `dist/firefox-mv3/manifest.json` file
 
 ### Packaging
 
-To package the extension for firefox:
+To package the extension for Firefox:
 
 ```bash
-# Install dependencies
-npm install
-
-npm run package
+bun run package
 ```
 
-Then:
-
-- Open Firefox and navigate to `about:debugging`
-- Click "This Firefox" in the sidebar
-- Click "Load Temporary Add-on..."
-- Select the `pisentinel.xpi` file
+The unsigned `.xpi` file will be created in the `web-ext-artifacts/` directory.
 
 ### Debugging
 
@@ -139,8 +131,8 @@ Then:
 The extension uses `console.log/warn/error` for logging. In development mode, useful logs include:
 
 - **API calls**: Check the Network tab in background script DevTools
-- **State changes**: Add `console.log` statements in `src/background/state/`
-- **Message passing**: Log in `src/background/index.ts` message handlers
+- **State changes**: Add `console.log` statements in `background/state/`
+- **Message passing**: Log in `entrypoints/background.ts` message handlers
 
 To add temporary debug logging:
 
@@ -151,14 +143,20 @@ console.log("[PiSentinel]", "Debug message", { data });
 
 ### Available Scripts
 
-| Command                | Description                                                      |
-| ---------------------- | ---------------------------------------------------------------- |
-| `npm run build`        | Production build to `dist/` (minified, no sourcemaps)            |
-| `npm run dev`          | Watch mode for development (unminified, inline sourcemaps)       |
-| `npm run lint`         | Run ESLint on TypeScript files                                   |
-| `npm run package`      | Build and create unsigned `pisentinel.xpi` for distribution      |
-| `npm run sign`         | Build and sign extension with Mozilla (requires AMO credentials) |
-| `npm run sign:channel` | Build and sign as unlisted (for self-distribution)               |
+| Command                  | Description                                                      |
+| ------------------------ | ---------------------------------------------------------------- |
+| `bun run dev`            | Development mode with hot reload                                 |
+| `bun run build`          | Production build to `dist/firefox-mv3/`                          |
+| `bun run lint`           | Run ESLint on TypeScript files                                   |
+| `bun run lint:fix`       | ESLint with auto-fix                                             |
+| `bun run format`         | Prettier formatting                                              |
+| `bun run test`           | Run unit tests (Vitest)                                          |
+| `bun run test:watch`     | Unit tests in watch mode                                         |
+| `bun run test:coverage`  | Unit tests with coverage                                         |
+| `bun run test:e2e`       | E2E tests (Playwright)                                           |
+| `bun run package`        | Build and create unsigned `.xpi` for distribution                |
+| `bun run sign`           | Build and sign extension with Mozilla (requires AMO credentials) |
+| `bun run sign:channel`   | Build and sign as unlisted (for self-distribution)               |
 
 ### Signing the Extension
 
@@ -186,10 +184,10 @@ To distribute your extension outside of development, you'll need to sign it with
 
    ```bash
    # For public distribution (listed on AMO)
-   npm run sign
+   bun run sign
 
    # For self-distribution (unlisted)
-   npm run sign:channel
+   bun run sign:channel
    ```
 
 The signed `.xpi` file will be created in the `web-ext-artifacts/` directory.
@@ -205,30 +203,49 @@ For testing without signing:
 ### Project Structure
 
 ```
-src/
-├── background/           # Background script (service worker)
-│   ├── api/              # Pi-hole API client
-│   ├── crypto/           # Credential encryption (PBKDF2 + AES-256-GCM)
-│   ├── services/         # Badge, notifications, domain tracking
-│   └── state/            # State management
-├── popup/                # Popup UI (Preact)
-├── sidebar/              # Sidebar UI (Preact)
-├── options/              # Options page (Preact)
-├── shared/               # Shared types, constants, messaging utilities
-├── icons/                # Extension icons (SVG source, PNG exports)
-└── manifest.json         # Extension manifest (MV3)
-
-scripts/
-├── build.js              # esbuild configuration and build script
-└── convert-icons.js      # SVG to PNG icon conversion
+/
+├── background/          # Background modules
+│   ├── api/             # Pi-hole v6 REST client
+│   ├── crypto/          # PBKDF2 + AES-256-GCM encryption
+│   ├── services/        # Badge, notifications, domain tracker
+│   └── state/           # Central state store
+├── components/          # Shared UI components
+├── entrypoints/         # WXT entry points
+│   ├── background.ts    # Background script
+│   ├── popup/           # Popup UI (Preact)
+│   ├── sidebar/         # Sidebar UI (Preact)
+│   └── options/         # Options page (Preact)
+├── public/              # Static assets (icons)
+├── tests/               # Unit + E2E tests
+└── utils/               # Shared utilities
 ```
 
 ### Tech Stack
 
 - **TypeScript** - Type-safe JavaScript with strict mode
 - **Preact** - Lightweight React alternative (~3KB gzipped)
-- **esbuild** - Fast bundler (~10ms rebuilds)
+- **WXT + Vite** - Modern web extension toolkit with hot reload
 - **webextension-polyfill** - Cross-browser WebExtensions API compatibility
+- **Vitest** - Unit testing framework
+- **Playwright** - E2E testing framework
+
+### Testing
+
+Run the test suite:
+
+```bash
+# Unit tests
+bun run test
+
+# Unit tests in watch mode
+bun run test:watch
+
+# Unit tests with coverage
+bun run test:coverage
+
+# E2E tests
+bun run test:e2e
+```
 
 ## Configuration
 
@@ -305,7 +322,7 @@ The toolbar badge shows:
 
 ### Extension not updating after code changes
 
-- Ensure `npm run dev` is running and shows successful rebuilds
+- Ensure `bun run dev` is running and shows successful rebuilds
 - Click "Reload" in `about:debugging` after each change
 - For popup changes, close and reopen the popup
 
@@ -326,7 +343,7 @@ Contributions are welcome! Here's how to get started:
 1. **Fork the repository** and clone your fork
 2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
 3. **Make your changes** following the existing code style
-4. **Run linting**: `npm run lint` and fix any issues
+4. **Run linting**: `bun run lint` and fix any issues
 5. **Test manually** in Firefox using the development workflow above
 6. **Commit your changes** with a descriptive message
 7. **Push to your fork** and open a Pull Request

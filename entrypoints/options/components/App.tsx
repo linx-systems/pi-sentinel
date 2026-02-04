@@ -1,3 +1,7 @@
+/**
+ * Options page main component - manages Pi-hole instance configuration.
+ * @module options/App
+ */
 import { useState } from "preact/hooks";
 import { InstanceList } from "./InstanceList";
 import { CheckIcon, ErrorIcon, InfoIcon } from "~/utils/icons";
