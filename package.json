@@ -26,6 +26,7 @@
     "test:e2e:setup": "cat tests/e2e/RUN_WITH_EXTENSION.md",
     "test:all": "npm run test:unit && npm run test:e2e",
     "package": "bun run build && cd dist/firefox-mv3 && zip -r ../../pisentinel.xpi .",
+    "package:source": "./scripts/package-source.sh",
     "sign": "bun run build && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET",
     "sign:channel": "bun run build && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET --channel=unlisted",
     "postinstall": "wxt prepare",
