@@ -61,6 +61,7 @@ export default defineBackground(() => {
   /**
    * Ephemeral key for encrypting instance session tokens.
    * Generated on initialization, stored only in memory.
+   * On Chrome, persisted to browser.storage.session to survive SW restarts.
    */
   let instanceSessionEncryptionKey: string | null = null;
 
@@ -91,6 +92,60 @@ export default defineBackground(() => {
    */
   const instanceAuthFailures = new Map<string, number>();
 
+  // ===== Chrome Service Worker State Persistence =====
+  // Chrome MV3 uses service workers that terminate when idle (~30s).
+  // Critical state must be persisted to browser.storage.session to survive restarts.
+
+  const SW_STATE_KEY = "__pisentinel_sw_state";
+
+  /**
+   * Persist critical in-memory state to browser.storage.session (Chrome only).
+   * Called after mutations to instanceSessionEncryptionKey or circuit breaker counters.
+   */
+  async function persistSwState(): Promise<void> {
+    if (import.meta.env.FIREFOX) return;
+    try {
+      await browser.storage.session.set({
+        [SW_STATE_KEY]: {
+          instanceSessionEncryptionKey,
+          consecutiveAuthFailures,
+          instanceAuthFailures: Object.fromEntries(instanceAuthFailures),
+        },
+      });
+    } catch (error) {
+      logger.debug("[PiSentinel] Failed to persist SW state:", error);
+    }
+  }
+
+  /**
+   * Restore critical in-memory state from browser.storage.session (Chrome only).
+   * Called during initialization before generating new keys.
+   * Returns true if state was restored, false if fresh init needed.
+   */
+  async function restoreSwState(): Promise<boolean> {
+    if (import.meta.env.FIREFOX) return false;
+    try {
+      const result = await browser.storage.session.get(SW_STATE_KEY);
+      const saved = result[SW_STATE_KEY];
+      if (saved?.instanceSessionEncryptionKey) {
+        instanceSessionEncryptionKey = saved.instanceSessionEncryptionKey;
+        consecutiveAuthFailures = saved.consecutiveAuthFailures ?? 0;
+        if (saved.instanceAuthFailures) {
+          for (const [id, count] of Object.entries(
+            saved.instanceAuthFailures,
+          )) {
+            instanceAuthFailures.set(id, count as number);
+          }
+        }
+        logger.debug("[PiSentinel] Restored SW state from storage.session");
+        return true;
+      }
+    } catch (error) {
+      logger.debug("[PiSentinel] Failed to restore SW state:", error);
+    }
+    return false;
+  }
+
   /**
    * Get consecutive auth failures for an instance.
    */
@@ -107,6 +162,7 @@ export default defineBackground(() => {
     logger.warn(
       `[PiSentinel] Auth failed for instance ${instanceId} (${current + 1}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
     );
+    void persistSwState();
   }
 
   /**
@@ -118,6 +174,7 @@ export default defineBackground(() => {
       logger.debug(
         `[PiSentinel] Auth failure counter reset for instance ${instanceId}`,
       );
+      void persistSwState();
     }
   }
 
@@ -138,6 +195,7 @@ export default defineBackground(() => {
     if (consecutiveAuthFailures > 0) {
       consecutiveAuthFailures = 0;
       logger.debug("[PiSentinel] Legacy auth failure counter reset");
+      void persistSwState();
     }
   }
 
@@ -272,9 +330,15 @@ export default defineBackground(() => {
     try {
       logger.info("[PiSentinel] Starting background script initialization");
 
-      // Generate ephemeral session encryption key (memory-only)
-      instanceSessionEncryptionKey = encryption.generateMasterPassword();
-      logger.debug("[PiSentinel] Instance session encryption key generated");
+      // On Chrome, try to restore state from a previous SW lifecycle first.
+      // This preserves the encryption key so existing encrypted sessions remain readable.
+      const restored = await restoreSwState();
+      if (!restored) {
+        // Generate ephemeral session encryption key (memory-only on Firefox, persisted on Chrome)
+        instanceSessionEncryptionKey = encryption.generateMasterPassword();
+        logger.debug("[PiSentinel] Instance session encryption key generated");
+        await persistSwState();
+      }
 
       // Initialize services
       logger.info("[PiSentinel] Initializing notification service");
@@ -310,6 +374,7 @@ export default defineBackground(() => {
           logger.warn(
             `[PiSentinel] Legacy auth failed (${consecutiveAuthFailures}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
           );
+          void persistSwState();
         }
         return false;
       });
@@ -1668,6 +1733,7 @@ export default defineBackground(() => {
           logger.warn(
             `[PiSentinel] Legacy keepalive auth failed (${consecutiveAuthFailures}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
           );
+          void persistSwState();
         }
         store.setState({ isConnected: false });
         await notificationService.showConnectionError("Session expired");

@@ -1,7 +1,7 @@
 {
   "name": "pisentinel",
   "version": "0.0.3",
-  "description": "Firefox MV3 extension for Pi-hole v6 integration",
+  "description": "Browser extension for Pi-hole v6 integration",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -14,6 +14,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:ext": "web-ext lint --source-dir=dist/firefox-mv3",
+    "lint:ext:chrome": "web-ext lint --source-dir=dist/chrome-mv3",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:watch": "vitest",
@@ -24,10 +25,11 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:setup": "cat tests/e2e/RUN_WITH_EXTENSION.md",
-    "test:all": "npm run test:unit && npm run test:e2e",
-    "package": "bun run build && cd dist/firefox-mv3 && zip -r ../../pisentinel.xpi .",
-    "sign": "bun run build && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET",
-    "sign:channel": "bun run build && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET --channel=unlisted",
+    "test:all": "bun run test:unit && bun run test:e2e",
+    "package": "bun run build:firefox && cd dist/firefox-mv3 && zip -r ../../pisentinel.xpi .",
+    "package:chrome": "bun run build && cd dist/chrome-mv3 && zip -r ../../pisentinel-chrome.zip .",
+    "sign": "bun run build:firefox && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET",
+    "sign:channel": "bun run build:firefox && web-ext sign --source-dir=dist/firefox-mv3 --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET --channel=unlisted",
     "postinstall": "wxt prepare",
     "prepare": "husky"
   },

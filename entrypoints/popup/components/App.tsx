@@ -169,11 +169,20 @@ export function App() {
 
   const openSidebar = async () => {
     try {
-      await browser.sidebarAction.open();
+      if (import.meta.env.FIREFOX) {
+        await browser.sidebarAction.open();
+      } else {
+        // Chrome/Edge: use sidePanel API
+        const window = await browser.windows.getCurrent();
+        await (chrome as any).sidePanel.open({ windowId: window.id });
+      }
     } catch {
       // Fallback: open sidebar panel in new tab
+      const page = import.meta.env.FIREFOX
+        ? "sidebar/sidebar.html"
+        : "sidepanel/sidepanel.html";
       browser.tabs.create({
-        url: browser.runtime.getURL("sidebar/sidebar.html"),
+        url: browser.runtime.getURL(page),
       });
     }
   };

@@ -8,20 +8,24 @@ export default defineConfig({
     plugins: [preact()],
   }),
 
-  manifest: {
+  manifest: ({ browser }) => ({
     name: "PiSentinel",
     version: "0.0.2",
     description: "Pi-hole v6 companion - monitor and control DNS blocking",
 
-    browser_specific_settings: {
-      gecko: {
-        id: "pisentinel@rooki.xyz",
-        strict_min_version: "142.0",
-        data_collection_permissions: {
-          required: ["none"],
-        },
-      },
-    },
+    ...(browser === "firefox"
+      ? {
+          browser_specific_settings: {
+            gecko: {
+              id: "pisentinel@rooki.xyz",
+              strict_min_version: "142.0",
+              data_collection_permissions: {
+                required: ["none"],
+              },
+            },
+          },
+        }
+      : {}),
 
     permissions: ["storage", "alarms", "notifications", "webRequest"],
 
@@ -43,14 +47,18 @@ export default defineConfig({
       default_title: "PiSentinel",
     },
 
-    sidebar_action: {
-      default_panel: "sidebar.html",
-      default_icon: {
-        16: "/icons/icon-16.png",
-        32: "/icons/icon-32.png",
-      },
-      default_title: "PiSentinel Domains",
-    },
+    ...(browser === "firefox"
+      ? {
+          sidebar_action: {
+            default_panel: "sidebar.html",
+            default_icon: {
+              16: "/icons/icon-16.png",
+              32: "/icons/icon-32.png",
+            },
+            default_title: "PiSentinel Domains",
+          },
+        }
+      : {}),
 
     options_ui: {
       page: "options.html",
@@ -60,8 +68,7 @@ export default defineConfig({
     content_security_policy: {
       extension_pages: "script-src 'self'; object-src 'self'",
     },
-  },
+  }),
 
-  browser: "firefox",
   manifestVersion: 3,
 });

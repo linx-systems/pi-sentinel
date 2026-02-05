@@ -13,3 +13,9 @@ Critical gotchas for agents working in this repo. Details in `.claude/rules/`.
 4. **Instance selector "All"** shows when 2+ instances configured (not based on connected count). Auto-connects on selection if stored password exists.
 
 5. **`useExtensionState`** retries `GET_STATE` on transient "background unreachable" errors and clears errors on `STATE_UPDATED`.
+
+6. **Cross-browser builds** — WXT defaults to Chrome. Use `bun run build:firefox` for Firefox output (`dist/firefox-mv3/`), `bun run build` for Chrome (`dist/chrome-mv3/`). The `package`/`sign` scripts explicitly target Firefox; use `package:chrome` for Chrome zips.
+
+7. **Sidebar vs Side Panel** — Firefox uses `sidebar/` (sidebar_action API), Chrome uses `sidepanel/` (sidePanel API). WXT auto-excludes the wrong one per browser. Popup code conditionally calls `browser.sidebarAction` or `browser.sidePanel` based on API availability.
+
+8. **Background script type** — Firefox uses event page (`background.scripts`), Chrome uses service worker (`background.service_worker`). WXT handles this automatically. The background script persists state via `storage.session` to survive SW restarts on Chrome.
