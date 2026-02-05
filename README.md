@@ -53,8 +53,8 @@ Install directly from the official Firefox Add-ons store:
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/nicokosi/pisentinel.git
-   cd pisentinel
+   git clone https://github.com/linx-systems/pi-sentinel
+   cd pi-sentinel
    # Optional: Go to release version ( the version soon to be uploaded )
    git checkout release
    ```
