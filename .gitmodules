@@ -1,3 +1,0 @@
-[submodule "packages/pihole-api"]
-	path = packages/pihole-api
-	url = git@github.com:linx-systems/pihole-api.git

@@ -1,6 +1,6 @@
 {
   "name": "pisentinel",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Firefox MV3 extension for Pi-hole v6 integration",
   "type": "module",
   "scripts": {
@@ -58,6 +58,7 @@
     "wxt": "^0.20.13"
   },
   "dependencies": {
+    "@linx-systems/pihole-api-client": "^0.1.1",
     "preact": "^10.25.4",
     "webextension-polyfill": "^0.12.0"
   },

@@ -602,7 +602,7 @@ export default defineBackground(() => {
       data: {
         ready: true,
         timestamp: Date.now(),
-        version: "0.0.1",
+        version: "0.0.3",
       },
     }),
     INSTANCES_UPDATED: () => ({ success: true }),

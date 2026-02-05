@@ -5,6 +5,7 @@
     "": {
       "name": "pisentinel",
       "dependencies": {
+        "@linx-systems/pihole-api-client": "^0.1.1",
         "preact": "^10.25.4",
         "webextension-polyfill": "^0.12.0",
       },
@@ -240,6 +241,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
+
+    "@linx-systems/pihole-api-client": ["@linx-systems/pihole-api-client@0.1.1", "", {}, "sha512-x5Z8HpIPYCymAUU2TmJRUQ53QCQBBLzM1L+dYMIc/NZcDirpBOyHy7wCl9e7sovlajVDqXF+cMlnS/0STcb93A=="],
 
     "@mdn/browser-compat-data": ["@mdn/browser-compat-data@7.1.22", "", {}, "sha512-pvfjbTDEYTDNKl9u3KbRzeNmU7PrcsFiGzIUbcB9JPq1LziTMs6YpE2x3Gf+2gHOPQzdO/KQ8hAr1Kkkzpklrg=="],
 

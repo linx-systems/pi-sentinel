@@ -105,3 +105,13 @@ export const RETRY_CONFIG = {
   RETRYABLE_STATUS_CODES: [408, 429, 500, 502, 503, 504],
   BACKOFF_MULTIPLIER: 2,
 } as const;
+
+// Feature Flags
+export const FEATURE_FLAGS = {
+  /**
+   * Use pihole-api-client library instead of custom client.
+   * When enabled, the extension uses the library adapter for all API calls.
+   * Set to false for parallel running/comparison testing.
+   */
+  USE_LIBRARY_CLIENT: false,
+} as const;

@@ -10,7 +10,7 @@ const mockBrowser = {
     id: "test-extension-id",
     getManifest: vi.fn(() => ({
       name: "PiSentinel",
-      version: "0.0.1",
+      version: "0.0.3",
       manifest_version: 3,
     })),
     getURL: vi.fn((path: string) => `moz-extension://test-id/${path}`),
