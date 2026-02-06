@@ -53,7 +53,7 @@ export function App() {
 
       <footer class="footer">
         <p>
-          PiSentinel v0.0.3 |{" "}
+          PiSentinel v0.0.3b |{" "}
           <a
             href="https://github.com/linx-systems/pi-sentinel"
             target="_blank"

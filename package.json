@@ -1,6 +1,6 @@
 {
   "name": "pisentinel",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Browser extension for Pi-hole v6 integration",
   "type": "module",
   "scripts": {
