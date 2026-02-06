@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PiSentinel is a Firefox Manifest V3 extension for Pi-hole v6 integration. It monitors DNS blocking statistics, controls
-blocking status, and manages domains directly from the browser.
+PiSentinel is a cross-browser Manifest V3 extension for Pi-hole v6 integration. It monitors DNS blocking statistics,
+controls blocking status, and manages domains directly from the browser. Supports Firefox and Chromium-based browsers
+(Chrome, Edge, etc.).
 
 **Key Technologies:**
 
@@ -13,7 +14,7 @@ blocking status, and manages domains directly from the browser.
 - Preact (lightweight React alternative)
 - WXT + Vite (bundler)
 - webextension-polyfill (cross-browser API compatibility)
-- Firefox MV3 (Manifest V3)
+- Manifest V3 (Firefox + Chromium)
 
 ## Directory Layout
 
@@ -28,7 +29,8 @@ blocking status, and manages domains directly from the browser.
 ├── entrypoints/         # WXT entry points
 │   ├── background.ts    # Background script
 │   ├── popup/           # Quick stats & blocking toggle
-│   ├── sidebar/         # Per-tab domain list & query log
+│   ├── sidebar/         # Per-tab domain list & query log (Firefox)
+│   ├── sidepanel/       # Per-tab domain list & query log (Chrome)
 │   └── options/         # Server config & 2FA setup
 ├── public/              # Static assets (icons)
 ├── tests/               # Unit + E2E tests
@@ -39,11 +41,15 @@ blocking status, and manages domains directly from the browser.
 
 ```bash
 bun install              # Install dependencies
-bun run dev              # Watch mode (unminified + sourcemaps)
-bun run build            # Production build
+bun run dev              # Watch mode — Chrome (default)
+bun run dev:firefox      # Watch mode — Firefox
+bun run build            # Production build — Chrome (default)
+bun run build:firefox    # Production build — Firefox
 bun run lint             # ESLint
-bun run lint:ext         # web-ext lint
-bun run package          # Build + unsigned .xpi
+bun run lint:ext         # web-ext lint (Firefox)
+bun run lint:ext:chrome  # web-ext lint (Chrome)
+bun run package          # Build Firefox + unsigned .xpi
+bun run package:chrome   # Build Chrome + .zip
 ```
 
 ## Detailed Documentation
