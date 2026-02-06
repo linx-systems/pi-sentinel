@@ -667,7 +667,7 @@ export default defineBackground(() => {
       data: {
         ready: true,
         timestamp: Date.now(),
-        version: "0.0.3b",
+        version: "0.0.4",
       },
     }),
     INSTANCES_UPDATED: () => ({ success: true }),

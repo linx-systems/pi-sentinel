@@ -10,7 +10,7 @@ export default defineConfig({
 
   manifest: ({ browser }) => ({
     name: "PiSentinel",
-    version: "0.0.3",
+    version: "0.0.4",
     description: "Pi-hole v6 companion - monitor and control DNS blocking",
 
     ...(browser === "firefox"
