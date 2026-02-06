@@ -403,6 +403,14 @@ export class InstanceManager {
       return null;
     }
 
+    // Passwordless instances always use empty string - no decryption needed
+    if (instance.passwordless) {
+      logger.info(
+        `[getDecryptedPassword] Passwordless instance ${instanceId}: returning empty password`,
+      );
+      return "";
+    }
+
     // Try to get master key from memory
     let masterKey = this.masterKeys.get(instanceId);
     logger.info(
