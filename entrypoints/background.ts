@@ -478,7 +478,10 @@ export default defineBackground(() => {
 
           // Fetch initial stats
           await refreshInstanceStats(instance.id);
-        } else if (instance.rememberPassword && instance.encryptedMasterKey) {
+        } else if (
+          instance.passwordless ||
+          (instance.rememberPassword && instance.encryptedMasterKey)
+        ) {
           // Try auto-reauthentication
           const password = await instanceManager.getDecryptedPassword(
             instance.id,
