@@ -52,6 +52,20 @@ bun run package          # Build Firefox + unsigned .xpi
 bun run package:chrome   # Build Chrome + .zip
 ```
 
+## Related Repositories
+
+PiSentinel is a multi-repo project:
+
+```
+../pisentinel-mobile/   # React Native + Expo SDK 54 mobile app (Android/iOS)
+../pisentinel-shared/   # @pisentinel/shared — types, constants, validation, utils
+```
+
+- **Shared package** is linked via `file:../pisentinel-shared` in mobile's `package.json`
+- Mobile app plan and progress tracker: `.claude/plans/dapper-wishing-sundae.md`
+- Mobile uses direct API calls (TanStack Query) instead of message passing
+- Mobile uses expo-secure-store (Keychain/Keystore) instead of PBKDF2+AES encryption
+
 ## Detailed Documentation
 
 Architecture, coding patterns, testing workflow, and debugging guides are in `.claude/rules/`:
