@@ -52,7 +52,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "prettier": "^3.8.1",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.2",
     "vite": "^7.3.1",
