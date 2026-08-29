@@ -1,7 +1,7 @@
 import browser from "webextension-polyfill";
 import { defineBackground } from "#imports";
 import { apiClient, apiClientManager } from "~/background/api/client";
-import { authManager } from "~/background/api/auth";
+import { authManager, isTotpChallenge } from "~/background/api/auth";
 import { instanceManager } from "~/background/api/instance-manager";
 import { encryption } from "~/background/crypto/encryption";
 import { store } from "~/background/state/store";
@@ -1477,13 +1477,7 @@ export default defineBackground(() => {
       const result = await client.authenticate(password, payload.totp);
 
       if (!result.success) {
-        // Check if TOTP is required
-        // Pi-hole returns: error.key="bad_request", message="No 2FA token found in JSON payload", status=400
-        // NOT "totp_required" - that key doesn't exist in Pi-hole's API
-        const isTotpRequired =
-          result.error?.key === "bad_request" &&
-          result.error?.message?.toLowerCase().includes("2fa");
-        if (isTotpRequired) {
+        if (isTotpChallenge(result.error, payload.totp)) {
           store.updateInstanceState(instance.id, { totpRequired: true });
           return {
             success: false,
@@ -1500,9 +1494,8 @@ export default defineBackground(() => {
       }
 
       if (result.data?.session) {
-        // Note: session.totp indicates 2FA is ENABLED on the account, not that it's required
-        // App passwords bypass 2FA, so we should NOT check session.totp here
-        // TOTP requirement is ONLY determined by error responses (error.key === "totp_required")
+        // A session response is final: `session.totp` only reports account 2FA
+        // capability and does not require another authentication step.
 
         // Store session
         await storeInstanceSession(

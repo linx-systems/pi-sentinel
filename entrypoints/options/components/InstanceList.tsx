@@ -332,23 +332,19 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
   const handleTotpSubmit = async (
     totp: string,
-    passwordFromInput: string,
+    passwordFromInput?: string,
   ): Promise<void> => {
     if (!connectingInstanceId) return;
 
-    const password = passwordFromInput ?? pendingPassword ?? undefined;
+    const password = useStoredPasswordForTotp
+      ? undefined
+      : (passwordFromInput ?? pendingPassword);
 
-    try {
-      await connectInstance({
-        instanceId: connectingInstanceId,
-        password,
-        totp,
-      });
-    } finally {
-      if (password === undefined && useStoredPasswordForTotp) {
-        setPendingPassword("");
-      }
-    }
+    await connectInstance({
+      instanceId: connectingInstanceId,
+      password,
+      totp,
+    });
   };
 
   const handleTotpCancel = () => {
@@ -441,9 +437,7 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   if (totpRequired && connectingInstanceId) {
     return (
       <TotpInput
-        onSubmit={async (totp: string, password: string) => {
-          await handleTotpSubmit(totp, password);
-        }}
+        onSubmit={handleTotpSubmit}
         onCancel={handleTotpCancel}
         isLoading={false}
         showPassword={false}

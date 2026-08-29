@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 
 interface TotpInputProps {
-  onSubmit: (totp: string, password: string) => Promise<void>;
+  onSubmit: (totp: string, password?: string) => Promise<void>;
   onCancel?: () => void;
   isLoading: boolean;
   showPassword?: boolean;
@@ -24,7 +24,7 @@ export function TotpInput({
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
     if (code.length !== 6 || (showPassword && !password)) return;
-    await onSubmit(code, password);
+    await onSubmit(code, showPassword ? password : undefined);
   };
 
   const handleCodeChange = (e: Event) => {

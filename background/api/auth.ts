@@ -17,6 +17,30 @@ import type {
 } from "~/utils/types";
 
 /**
+ * Determines whether a failed authentication response should prompt for TOTP.
+ *
+ * Pi-hole may return either `totp_required`, or (for a password-only request)
+ * the exact 400 `bad_request` response saying no 2FA token was present.
+ * A response after a submitted TOTP is always an authentication failure so an
+ * invalid code is not misclassified as another challenge.
+ */
+export function isTotpChallenge(
+  error: { key: string; message: string; status: number } | undefined,
+  submittedTotp?: string,
+): boolean {
+  if (submittedTotp !== undefined || !error) {
+    return false;
+  }
+
+  return (
+    error.key === "totp_required" ||
+    (error.key === "bad_request" &&
+      error.status === 400 &&
+      error.message === "No 2FA token found in JSON payload")
+  );
+}
+
+/**
  * Authentication Manager
  *
  * Handles the complete authentication lifecycle:
@@ -229,13 +253,7 @@ export class AuthManager {
     const result = await apiClient.authenticate(password, totp);
 
     if (!result.success) {
-      // Check if TOTP is required
-      // Pi-hole returns: error.key="bad_request", message="No 2FA token found in JSON payload", status=400
-      // NOT "totp_required" - that key doesn't exist in Pi-hole's API
-      const isTotpRequired =
-        result.error?.key === "bad_request" &&
-        result.error?.message?.toLowerCase().includes("2fa");
-      if (isTotpRequired) {
+      if (isTotpChallenge(result.error, totp)) {
         return { success: false, totpRequired: true };
       }
       return {
@@ -245,9 +263,8 @@ export class AuthManager {
     }
 
     if (result.data?.session) {
-      // Note: session.totp indicates 2FA is ENABLED on the account, not that it's required
-      // App passwords bypass 2FA, so we should NOT check session.totp here
-      // TOTP requirement is ONLY determined by error responses (error.key === "totp_required")
+      // A session response is final: `session.totp` only reports account 2FA
+      // capability and does not require another authentication step.
 
       // Store session
       await this.storeSession(
