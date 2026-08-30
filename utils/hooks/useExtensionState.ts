@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import { logger } from "~/utils/logger";
+import type { BroadcastMessage } from "~/utils/messaging";
 import type { ExtensionState } from "~/utils/types";
-import type { MessageResponse } from "~/utils/messaging";
+import { createRuntimeExtensionCommands } from "~/utils/extension-commands";
+import { isRecord } from "~/utils/commands/response-validation";
 
 /**
  * Shared hook for managing extension state across UI components.
@@ -19,56 +21,89 @@ export interface UseExtensionStateReturn {
   refetch: () => Promise<void>;
 }
 
+function isTransientRuntimeError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "";
+  return (
+    message.includes("Could not establish connection") ||
+    message.includes("Receiving end does not exist") ||
+    message.includes("Extension context invalidated")
+  );
+}
+
+function isStateUpdatedMessage(
+  message: unknown,
+): message is Extract<BroadcastMessage, { type: "STATE_UPDATED" }> {
+  return (
+    isRecord(message) &&
+    message.type === "STATE_UPDATED" &&
+    isRecord(message.payload)
+  );
+}
+
+const STATE_FETCH_FAILURE_MESSAGE = "Failed to fetch extension state";
+
+const commands = createRuntimeExtensionCommands();
+
 export function useExtensionState(): UseExtensionStateReturn {
   const [state, setState] = useState<ExtensionState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimeoutRef = useRef<number | null>(null);
 
   const fetchState = useCallback(async () => {
     setIsLoading(true);
     setError(null);
 
-    try {
-      const response = (await browser.runtime.sendMessage({
-        type: "GET_STATE",
-      })) as MessageResponse<ExtensionState> | undefined;
+    const scheduleRetry = () => {
+      if (retryTimeoutRef.current !== null) return;
+      retryTimeoutRef.current = window.setTimeout(() => {
+        retryTimeoutRef.current = null;
+        void fetchState();
+      }, 1000);
+    };
 
-      if (response?.success && response.data) {
+    try {
+      const response = await commands.getState();
+
+      if (response.success) {
         setState(response.data);
       } else {
-        setError(response?.error || "Failed to fetch extension state");
+        const isTransientFailure = isTransientRuntimeError(response.error);
+        if (isTransientFailure) scheduleRetry();
+        setError(
+          isTransientFailure ? STATE_FETCH_FAILURE_MESSAGE : response.error,
+        );
       }
-    } catch (err) {
-      logger.error("Failed to fetch extension state:", err);
-      setError(err instanceof Error ? err.message : "Unknown error");
-
-      const errorMessage =
-        err instanceof Error ? err.message : String(err ?? "");
-      if (
-        errorMessage.includes("Could not establish connection") ||
-        errorMessage.includes("Receiving end does not exist") ||
-        errorMessage.includes("Extension context invalidated")
-      ) {
-        if (retryTimeoutRef.current === null) {
-          retryTimeoutRef.current = setTimeout(() => {
-            retryTimeoutRef.current = null;
-            fetchState();
-          }, 1000);
-        }
-      }
+    } catch (error) {
+      logger.error("Failed to fetch extension state:", error);
+      const isTransientFailure = isTransientRuntimeError(error);
+      if (isTransientFailure) scheduleRetry();
+      setError(
+        isTransientFailure
+          ? STATE_FETCH_FAILURE_MESSAGE
+          : error instanceof Error
+            ? error.message
+            : "Unknown error",
+      );
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchState();
+    void fetchState();
 
     // Listen for state updates from background
-    const handleMessage = (message: any) => {
-      if (message.type === "STATE_UPDATED" && message.payload) {
-        setState(message.payload);
+    const handleMessage = (message: unknown) => {
+      if (isStateUpdatedMessage(message)) {
+        setState((current) =>
+          current === null ? current : { ...current, ...message.payload },
+        );
         setError(null);
         setIsLoading(false);
       }

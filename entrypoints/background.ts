@@ -1,9 +1,25 @@
 import browser from "webextension-polyfill";
 import { defineBackground } from "#imports";
-import { apiClient, apiClientManager } from "~/background/api/client";
-import { authManager, isTotpChallenge } from "~/background/api/auth";
-import { instanceManager } from "~/background/api/instance-manager";
+import { createInitializationGate } from "~/background/readiness";
+import { ApiClientManager, PiholeApiClient } from "~/background/api/client";
+import { isTotpChallenge } from "~/background/api/auth";
 import { encryption } from "~/background/crypto/encryption";
+import { instanceManager } from "~/background/api/instance-manager";
+import {
+  createInstanceRuntime,
+  type InstanceRuntime,
+} from "~/background/runtime/instances";
+import {
+  createFleetQueries,
+  type DomainSearchEntry,
+  type FleetQueryEntry,
+  type FleetResult,
+} from "~/background/fleet/queries";
+import {
+  getInstanceSession,
+  storeInstanceSession,
+} from "~/background/session-storage";
+import { loadSwState, saveSwState } from "~/background/sw-state";
 import { store } from "~/background/state/store";
 import { badgeService } from "~/background/services/badge";
 import { notificationService } from "~/background/services/notifications";
@@ -15,21 +31,28 @@ import {
   ERROR_MESSAGES,
   STORAGE_KEYS,
 } from "~/utils/constants";
+import { classifyConnectInstanceFailure } from "~/utils/connection-failure";
 import { logger } from "~/utils/logger";
-import { ErrorHandler, ErrorType } from "~/utils/error-handler";
+import {
+  createRuntimeStorageCommandSignalReceiver,
+  isStorageCommandSignal,
+  registerStorageCommandReceiver,
+} from "~/utils/extension-commands";
+import {
+  createCommandDispatcher,
+  type CommandHandlerRegistry,
+} from "~/utils/commands/dispatcher";
 import type {
+  CommandMessage,
   CreateTemporaryAllowsPayload,
   CreateTemporaryAllowsResult,
-  Message,
   MessageResponse,
   RemoveTemporaryAllowsPayload,
   RemoveTemporaryAllowsResult,
 } from "~/utils/messaging";
 import type {
-  EncryptedSessionData,
-  ExtensionState,
-  QueryEntry,
   SessionData,
+  StatsSummary,
   TemporaryAllowEntry,
 } from "~/utils/types";
 
@@ -75,149 +98,274 @@ export default defineBackground(() => {
   let instanceSessionEncryptionKey: string | null = null;
 
   /**
-   * Flag to prevent duplicate initialization.
-   * On extension reload, both onInstalled and immediate init can fire.
+   * Shares one initialization result with startup events and all dispatchers.
+   * A rejected initialization remains rejected for the lifetime of this worker.
    */
-  let initializationPromise: Promise<void> | null = null;
+  const initializationGate = createInitializationGate();
 
-  /**
-   * Flag to prevent stats refresh during instance switch.
-   * Set of instance IDs currently being transitioned.
-   */
-  const instancesInTransition: Set<string> = new Set();
+  // Renewal failure state is private to the multi-instance runtime and survives
+  // Chrome service-worker restarts through the runtime lifecycle adapter.
 
-  // ===== Circuit Breaker for Auth Retries =====
-  // Prevents infinite retry loops when Pi-hole sessions are externally invalidated
-
-  /**
-   * Consecutive auth failure counter for legacy single-instance mode.
-   * Circuit breaker opens when this reaches MAX_CONSECUTIVE_AUTH_FAILURES.
-   */
-  let consecutiveAuthFailures = 0;
-
-  /**
-   * Per-instance auth failure counters for multi-instance mode.
-   * Maps instance ID to failure count.
-   */
   const instanceAuthFailures = new Map<string, number>();
+  const clientRegistry = new ApiClientManager();
 
+  const fleetQueries = createFleetQueries({
+    store,
+    instances: instanceManager,
+    clients: clientRegistry,
+  });
   const temporaryAllowService = new TemporaryAllowService({
     getInstances: () => instanceManager.getInstances(),
-    getClient: (instanceId) => apiClientManager.getClient(instanceId),
+    getClient: (instanceId) => clientRegistry.getClient(instanceId),
   });
 
   // ===== Chrome Service Worker State Persistence =====
-  // Chrome MV3 uses service workers that terminate when idle (~30s).
+  const instanceRuntime = createRuntime();
+  function createRuntime(): InstanceRuntime {
+    return createInstanceRuntime({
+      storage: {
+        loadInstances: async () => {
+          const config = await instanceManager.getInstances();
+          return {
+            instances: config.instances.map((instance) => ({
+              ...instance,
+              savedPassword: null,
+            })),
+            activeInstanceId: config.activeInstanceId,
+          };
+        },
+        addInstance: async (input) => ({
+          ...(await instanceManager.addInstance(
+            input.name,
+            input.piholeUrl,
+            input.password,
+            input.rememberPassword,
+          )),
+          savedPassword: null,
+        }),
+        updateInstance: async (input) => {
+          const instance = await instanceManager.updateInstance(
+            input.instanceId,
+            {
+              name: input.name,
+              piholeUrl: input.piholeUrl,
+              password: input.password,
+              rememberPassword: input.rememberPassword,
+            },
+          );
+          return instance ? { ...instance, savedPassword: null } : null;
+        },
+        removeInstanceConfiguration: (instanceId) =>
+          instanceManager.removeInstanceConfiguration(instanceId),
+        setActiveInstance: (instanceId) =>
+          instanceManager.setActiveInstance(instanceId),
+        loadSessions: async () => {
+          const { instances } = await instanceManager.getInstances();
+          const sessions = await Promise.all(
+            instances.map(async (instance) => {
+              const session = await getInstanceSession(
+                instance.id,
+                instanceSessionEncryptionKey,
+              );
+              return session ? ([instance.id, session] as const) : null;
+            }),
+          );
+          return new Map(
+            sessions.filter(
+              (session): session is readonly [string, SessionData] =>
+                session !== null,
+            ),
+          );
+        },
+        saveSession: async (instanceId, session) => {
+          await storeInstanceSession(
+            instanceId,
+            session.sid,
+            session.csrf,
+            (session.expiresAt - Date.now()) / 1000,
+            instanceSessionEncryptionKey,
+          );
+        },
+        deleteSession: async (instanceId) => {
+          await browser.storage.session.remove(
+            `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`,
+          );
+        },
+        deleteInstanceCredentials: async (instanceId) => {
+          await instanceManager.deleteInstanceSessionMaterial(instanceId);
+        },
+      },
+      clients: {
+        configure: (instance) => {
+          const client = clientRegistry.configureClient(
+            instance.id,
+            instance.piholeUrl ?? "",
+          );
+          return {
+            setSession: (sid, csrf) => client.setSession(sid, csrf),
+            authenticate: async (password, totp) => {
+              if (password === null) {
+                return {
+                  ok: false as const,
+                  reason: "invalid" as const,
+                  message: "No saved password for this instance",
+                };
+              }
+              const result = await client.authenticate(password, totp);
+              if (result.success && result.data?.session) {
+                return {
+                  ok: true as const,
+                  session: {
+                    sid: result.data.session.sid,
+                    csrf: result.data.session.csrf,
+                    expiresAt: Date.now() + result.data.session.validity * 1000,
+                  },
+                };
+              }
+              const message = formatConnectionError(result.error);
+              return {
+                ok: false as const,
+                reason: isTotpChallenge(result.error, totp)
+                  ? ("totp" as const)
+                  : ("invalid" as const),
+                message,
+                error: classifyConnectInstanceFailure({
+                  message,
+                  status: result.error?.status,
+                }),
+              };
+            },
+            logout: () => client.logout(),
+            getStats: async () => {
+              const result = await client.getStats();
+              return result.success && result.data
+                ? { ok: true as const, stats: result.data }
+                : {
+                    ok: false as const,
+                    unauthorized: result.error?.status === 401,
+                    message: formatConnectionError(result.error),
+                  };
+            },
+            getBlockingStatus: async () => {
+              const result = await client.getBlockingStatus();
+              return result.success && result.data
+                ? { ok: true as const, status: result.data }
+                : {
+                    ok: false as const,
+                    message: formatConnectionError(result.error),
+                  };
+            },
+            setBlocking: async (enabled, timer) => {
+              const result = await client.setBlocking(enabled, timer);
+              return result.success && result.data
+                ? { ok: true as const, status: result.data }
+                : {
+                    ok: false as const,
+                    message: formatConnectionError(result.error),
+                  };
+            },
+          };
+        },
+        remove: (instanceId) => clientRegistry.removeClient(instanceId),
+      },
+      state: {
+        connectionSucceeded: async (instanceId) => {
+          await store.connectionSucceeded(instanceId);
+          await broadcastInstancesUpdated();
+        },
+        requireTotp: async (instanceId) => {
+          await store.requireTotp(instanceId);
+          await broadcastInstancesUpdated();
+        },
+        connectionFailed: async (instanceId, error) => {
+          await store.connectionFailed(instanceId, error);
+          await broadcastInstancesUpdated();
+        },
+        recordStatsSnapshot: async (instanceId, stats) => {
+          await store.recordStatsSnapshot(instanceId, stats as StatsSummary);
+          await broadcastInstancesUpdated();
+        },
+        recordBlockingSnapshot: async (instanceId, status) => {
+          const recorded = await store.recordBlockingSnapshot(
+            instanceId,
+            status,
+          );
+          if (recorded) await broadcastInstancesUpdated();
+          return recorded;
+        },
+        disconnectInstance: async (instanceId) => {
+          await store.disconnectInstance(instanceId);
+          await broadcastInstancesUpdated();
+        },
+        selectInstance: async (instanceId) => {
+          await store.selectInstance(instanceId);
+          await broadcastInstancesUpdated();
+        },
+        removeInstance: async (instanceId, activeInstanceId) => {
+          await store.removeInstance(instanceId, activeInstanceId);
+          await broadcastInstancesUpdated();
+        },
+      },
+      temporaryAllows: {
+        removeForInstance: (instanceId) =>
+          temporaryAllowService.removeForInstance(instanceId),
+      },
+      now: () => Date.now(),
+      maxConsecutiveRenewalFailures: DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES,
+      getSavedPassword: (instance) =>
+        instanceManager.getDecryptedPassword(instance.id),
+      lifecycle: {
+        loadRenewalFailures: async () => new Map(instanceAuthFailures),
+        saveRenewalFailures: async (failures) => {
+          instanceAuthFailures.clear();
+          for (const [instanceId, count] of failures) {
+            instanceAuthFailures.set(instanceId, count);
+          }
+          await persistSwState();
+        },
+      },
+    });
+  }
   // Critical state must be persisted to browser.storage.session to survive restarts.
-
-  const SW_STATE_KEY = "__pisentinel_sw_state";
 
   /**
    * Persist critical in-memory state to browser.storage.session (Chrome only).
-   * Called after mutations to instanceSessionEncryptionKey or circuit breaker counters.
+   * Storage failures reject initialization rather than silently rotating keys.
    */
   async function persistSwState(): Promise<void> {
     if (import.meta.env.FIREFOX) return;
-    try {
-      await browser.storage.session.set({
-        [SW_STATE_KEY]: {
-          instanceSessionEncryptionKey,
-          consecutiveAuthFailures,
-          instanceAuthFailures: Object.fromEntries(instanceAuthFailures),
-        },
-      });
-    } catch (error) {
-      logger.debug("[PiSentinel] Failed to persist SW state:", error);
-    }
+    await saveSwState({
+      instanceSessionEncryptionKey,
+      instanceAuthFailures: Object.fromEntries(instanceAuthFailures),
+    });
   }
 
   /**
    * Restore critical in-memory state from browser.storage.session (Chrome only).
-   * Called during initialization before generating new keys.
-   * Returns true if state was restored, false if fresh init needed.
+   * Returns false only when no state was stored.
    */
   async function restoreSwState(): Promise<boolean> {
     if (import.meta.env.FIREFOX) return false;
-    try {
-      const result = await browser.storage.session.get(SW_STATE_KEY);
-      const saved = result[SW_STATE_KEY];
-      if (saved?.instanceSessionEncryptionKey) {
-        instanceSessionEncryptionKey = saved.instanceSessionEncryptionKey;
-        consecutiveAuthFailures = saved.consecutiveAuthFailures ?? 0;
-        if (saved.instanceAuthFailures) {
-          for (const [id, count] of Object.entries(
-            saved.instanceAuthFailures,
-          )) {
-            instanceAuthFailures.set(id, count as number);
-          }
-        }
-        logger.debug("[PiSentinel] Restored SW state from storage.session");
-        return true;
-      }
-    } catch (error) {
-      logger.debug("[PiSentinel] Failed to restore SW state:", error);
+    const saved = await loadSwState();
+    if (!saved) {
+      return false;
     }
-    return false;
-  }
-
-  /**
-   * Get consecutive auth failures for an instance.
-   */
-  function getInstanceAuthFailures(instanceId: string): number {
-    return instanceAuthFailures.get(instanceId) ?? 0;
-  }
-
-  /**
-   * Increment auth failures for an instance.
-   */
-  function incrementInstanceAuthFailures(instanceId: string): void {
-    const current = getInstanceAuthFailures(instanceId);
-    instanceAuthFailures.set(instanceId, current + 1);
-    logger.warn(
-      `[PiSentinel] Auth failed for instance ${instanceId} (${current + 1}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
-    );
-    void persistSwState();
-  }
-
-  /**
-   * Reset auth failures for an instance (on successful auth or manual connect).
-   */
-  function resetInstanceAuthFailures(instanceId: string): void {
-    if (instanceAuthFailures.has(instanceId)) {
-      instanceAuthFailures.delete(instanceId);
-      logger.debug(
-        `[PiSentinel] Auth failure counter reset for instance ${instanceId}`,
-      );
-      void persistSwState();
+    if (typeof saved.instanceSessionEncryptionKey !== "string") {
+      throw new Error("Invalid persisted service-worker session key");
     }
-  }
-
-  /**
-   * Check if circuit breaker is open for an instance.
-   */
-  function isInstanceCircuitBreakerOpen(instanceId: string): boolean {
-    return (
-      getInstanceAuthFailures(instanceId) >=
-      DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES
-    );
-  }
-
-  /**
-   * Reset legacy auth failure counter.
-   */
-  function resetLegacyAuthFailures(): void {
-    if (consecutiveAuthFailures > 0) {
-      consecutiveAuthFailures = 0;
-      logger.debug("[PiSentinel] Legacy auth failure counter reset");
-      void persistSwState();
+    if (
+      !saved.instanceAuthFailures ||
+      typeof saved.instanceAuthFailures !== "object"
+    ) {
+      throw new Error("Invalid persisted service-worker failure state");
     }
-  }
 
-  /**
-   * Check if legacy circuit breaker is open.
-   */
-  function isLegacyCircuitBreakerOpen(): boolean {
-    return consecutiveAuthFailures >= DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES;
+    instanceSessionEncryptionKey = saved.instanceSessionEncryptionKey;
+    for (const [id, count] of Object.entries(saved.instanceAuthFailures)) {
+      instanceAuthFailures.set(id, count);
+    }
+    logger.debug("[PiSentinel] Restored SW state from storage.session");
+    return true;
   }
 
   type ConnectionErrorInfo = {
@@ -293,51 +441,8 @@ export default defineBackground(() => {
     return fallback;
   };
 
-  const formatAuthError = (message?: string | null): string => {
-    if (!message) {
-      return "Login failed. Try again?";
-    }
-    const lower = message.toLowerCase();
-
-    if (
-      lower.includes("authentication") ||
-      lower.includes("password") ||
-      lower.includes("unauthorized") ||
-      lower.includes("401") ||
-      lower.includes("403")
-    ) {
-      return "Login failed — check the password (or leave it blank if this Pi-hole has no password).";
-    }
-
-    if (lower.includes("certificate") || lower.includes("ssl")) {
-      return "SSL cert issue. Open the Pi-hole URL in your browser, accept the cert, then try again.";
-    }
-
-    if (
-      lower.includes("timed out") ||
-      lower.includes("timeout") ||
-      lower.includes("failed to fetch") ||
-      lower.includes("network")
-    ) {
-      return "Can't reach the host. Check the URL and that the Pi-hole is online.";
-    }
-
-    return `Something else went wrong: ${message}`;
-  };
-
-  // ===== Initialization =====
-
   async function initialize(): Promise<void> {
-    // Prevent duplicate initialization (e.g., onInstalled + immediate init on reload)
-    if (initializationPromise) {
-      logger.debug(
-        "[PiSentinel] Initialization already in progress, waiting...",
-      );
-      return initializationPromise;
-    }
-
-    initializationPromise = doInitialize();
-    return initializationPromise;
+    return initializationGate.initialize(doInitialize);
   }
 
   async function doInitialize(): Promise<void> {
@@ -354,48 +459,22 @@ export default defineBackground(() => {
         await persistSwState();
       }
 
-      // Initialize services
+      // Migrate legacy storage before any service observes runtime settings.
+      logger.info("[PiSentinel] Initializing instance manager");
+      await instanceManager.initialize();
+
       logger.info("[PiSentinel] Initializing notification service");
       await notificationService.initialize();
 
       logger.info("[PiSentinel] Initializing domain tracker");
       domainTracker.initialize();
 
-      // Initialize instance manager (handles migration from single-instance)
-      logger.info("[PiSentinel] Initializing instance manager");
-      await instanceManager.initialize();
-
-      // Set up auth re-authentication handler for legacy API client
-      logger.info("[PiSentinel] Setting up auth handler");
-      apiClient.setAuthRequiredHandler(async () => {
-        // Circuit breaker: stop auto-retry if too many consecutive failures
-        if (isLegacyCircuitBreakerOpen()) {
-          logger.warn(
-            `[PiSentinel] Legacy auth circuit breaker open (${consecutiveAuthFailures} failures) - skipping auto-retry`,
-          );
-          return false;
-        }
-
-        const password = await authManager.getDecryptedPassword();
-        if (password !== null) {
-          // authManager.authenticate already handles logout-before-auth
-          const result = await authManager.authenticate(password);
-          if (result.success) {
-            resetLegacyAuthFailures();
-            return true;
-          }
-          consecutiveAuthFailures++;
-          logger.warn(
-            `[PiSentinel] Legacy auth failed (${consecutiveAuthFailures}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
-          );
-          void persistSwState();
-        }
-        return false;
+      logger.info("[PiSentinel] Attempting to restore instance sessions");
+      await instanceRuntime.initialize();
+      await browser.alarms.create(ALARMS.SESSION_KEEPALIVE, {
+        periodInMinutes: DEFAULTS.SESSION_KEEPALIVE_INTERVAL,
       });
-
-      // Try to restore sessions for all instances
-      logger.info("[PiSentinel] Attempting to restore sessions");
-      await initializeInstances();
+      await startStatsPolling();
       await temporaryAllowService.initialize();
 
       // Notify any open options pages that initialization is complete
@@ -414,255 +493,14 @@ export default defineBackground(() => {
 
       logger.info("[PiSentinel] Background script initialized successfully");
     } catch (error) {
-      logger.error(
-        "[PiSentinel] Initialization error (message listener will still work):",
-        error,
-      );
-      // Don't re-throw - allow message listener to still function
-    }
-  }
-
-  /**
-   * Initialize all configured instances.
-   * Restores sessions and sets up API clients.
-   */
-  async function initializeInstances(): Promise<void> {
-    const config = await instanceManager.getInstances();
-
-    if (config.instances.length === 0) {
-      // No instances configured - try legacy single-instance auth
-      const hasSession = await authManager.initialize();
-      if (hasSession) {
-        logger.info("[PiSentinel] Legacy session restored successfully");
-        store.setState({ isConnected: true });
-        await refreshStats();
-      }
-      return;
-    }
-
-    // Set active instance in store
-    store.setActiveInstanceId(config.activeInstanceId);
-
-    // Initialize each instance
-    for (const instance of config.instances) {
-      try {
-        // Configure API client for this instance
-        const client = apiClientManager.configureClient(
-          instance.id,
-          instance.piholeUrl,
-        );
-
-        // Set up re-auth handler for this instance
-        apiClientManager.setAuthHandler(instance.id, async () => {
-          // Circuit breaker: stop auto-retry if too many consecutive failures
-          if (isInstanceCircuitBreakerOpen(instance.id)) {
-            logger.warn(
-              `[PiSentinel] Auth circuit breaker open for instance ${instance.id} - skipping auto-retry`,
-            );
-            return false;
-          }
-
-          const password = await instanceManager.getDecryptedPassword(
-            instance.id,
-          );
-          if (password !== null) {
-            // Logout first to prevent ghost sessions
-            if (client.hasSession()) {
-              try {
-                await client.logout();
-              } catch {
-                // Continue with re-auth
-              }
-            }
-            const result = await client.authenticate(password);
-            if (result.success) {
-              resetInstanceAuthFailures(instance.id);
-              return true;
-            }
-            incrementInstanceAuthFailures(instance.id);
-          }
-          return false;
-        });
-
-        // Try to restore session from encrypted storage
-        const session = await getInstanceSession(instance.id);
-
-        if (session && session.expiresAt > Date.now()) {
-          client.setSession(session.sid, session.csrf);
-          store.updateInstanceState(instance.id, { isConnected: true });
-
-          // Fetch initial stats
-          await refreshInstanceStats(instance.id);
-        } else if (
-          instance.passwordless ||
-          (instance.rememberPassword && instance.encryptedMasterKey)
-        ) {
-          // Try auto-reauthentication
-          const password = await instanceManager.getDecryptedPassword(
-            instance.id,
-          );
-          if (password !== null) {
-            // Note: client.hasSession() is false here (fresh start), but Pi-hole
-            // might have old sessions from previous browser sessions that we can't
-            // invalidate since we don't have the session ID. Those will expire naturally.
-            const result = await client.authenticate(password);
-            if (result.success && result.data?.session) {
-              // Store session
-              await storeInstanceSession(
-                instance.id,
-                result.data.session.sid,
-                result.data.session.csrf,
-                result.data.session.validity,
-              );
-              store.updateInstanceState(instance.id, { isConnected: true });
-              await refreshInstanceStats(instance.id);
-            }
-          }
-        }
-      } catch (error) {
-        logger.error(
-          `[PiSentinel] Failed to initialize instance ${instance.id}:`,
-          error,
-        );
-        store.updateInstanceState(instance.id, {
-          isConnected: false,
-          connectionError: "Initialization failed",
-        });
-      }
-    }
-
-    // Start keepalive alarm
-    await browser.alarms.create(ALARMS.SESSION_KEEPALIVE, {
-      periodInMinutes: DEFAULTS.SESSION_KEEPALIVE_INTERVAL,
-    });
-
-    // Start stats refresh alarm
-    await browser.alarms.create(ALARMS.STATS_REFRESH, {
-      periodInMinutes: config.globalSettings.refreshInterval / 60,
-    });
-  }
-
-  /**
-   * Store session for a specific instance.
-   * Session tokens are encrypted with an ephemeral key.
-   */
-  async function storeInstanceSession(
-    instanceId: string,
-    sid: string,
-    csrf: string,
-    validity: number,
-  ): Promise<void> {
-    const expiresAt = Date.now() + validity * 1000;
-    const session: SessionData = { sid, csrf, expiresAt };
-    const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
-
-    // Encrypt session tokens before storing
-    if (instanceSessionEncryptionKey) {
-      try {
-        const encryptedSession = await encryption.encrypt(
-          JSON.stringify(session),
-          instanceSessionEncryptionKey,
-        );
-        const storedData: EncryptedSessionData = {
-          encrypted: encryptedSession,
-          expiresAt, // Store expiry in clear for quick validity checks
-        };
-        await browser.storage.session.set({ [sessionKey]: storedData });
-        return;
-      } catch (error) {
-        logger.warn(
-          "[PiSentinel] Failed to encrypt instance session, storing unencrypted:",
-          error,
-        );
-      }
-    }
-
-    // Fallback to unencrypted (should not happen in normal operation)
-    await browser.storage.session.set({ [sessionKey]: session });
-  }
-
-  /**
-   * Get session for a specific instance.
-   * Decrypts session tokens if they were stored encrypted.
-   */
-  async function getInstanceSession(
-    instanceId: string,
-  ): Promise<SessionData | null> {
-    const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
-    const result = await browser.storage.session.get(sessionKey);
-    const storedData = result[sessionKey];
-
-    if (!storedData) {
-      return null;
-    }
-
-    // Check if data is encrypted (has 'encrypted' field)
-    if (
-      instanceSessionEncryptionKey &&
-      storedData.encrypted &&
-      storedData.expiresAt
-    ) {
-      try {
-        // Quick expiry check before decryption
-        if (storedData.expiresAt < Date.now()) {
-          return null;
-        }
-
-        const decrypted = await encryption.decrypt(
-          storedData.encrypted,
-          instanceSessionEncryptionKey,
-        );
-        return JSON.parse(decrypted) as SessionData;
-      } catch (error) {
-        // Decryption failed - session key may have changed (browser restart)
-        logger.debug("[PiSentinel] Failed to decrypt instance session:", error);
-        return null;
-      }
-    }
-
-    // Legacy unencrypted format (for backward compatibility during transition)
-    if (storedData.sid && storedData.csrf && storedData.expiresAt) {
-      return storedData as SessionData;
-    }
-
-    return null;
-  }
-
-  /**
-   * Refresh stats for a specific instance.
-   */
-  async function refreshInstanceStats(instanceId: string): Promise<void> {
-    const client = apiClientManager.getClient(instanceId);
-
-    const statsResult = await client.getStats();
-    if (statsResult.success && statsResult.data) {
-      store.updateInstanceState(instanceId, {
-        stats: statsResult.data,
-        statsLastUpdated: Date.now(),
-      });
-    }
-
-    const blockingResult = await client.getBlockingStatus();
-    if (blockingResult.success && blockingResult.data) {
-      store.updateInstanceState(instanceId, {
-        blockingEnabled: blockingResult.data.blocking === "enabled",
-        blockingTimer: blockingResult.data.timer,
-      });
+      logger.error("[PiSentinel] Initialization error:", error);
+      throw error;
     }
   }
 
   // ===== Message Handling =====
 
-  // Message handler type definition
-  type MessageHandler<T = any> = (
-    payload?: any,
-    sender?: browser.Runtime.MessageSender,
-  ) => Promise<MessageResponse<T>> | MessageResponse<T>;
-
-  // Message handler map for cleaner routing
-  const messageHandlers: Record<string, MessageHandler> = {
-    AUTHENTICATE: (payload) => handleAuthenticate(payload),
-    LOGOUT: () => handleLogout(),
+  const messageHandlers: CommandHandlerRegistry = {
     GET_STATE: () => ({ success: true, data: store.getState() }),
     GET_STATS: () => handleGetStats(),
     GET_BLOCKING_STATUS: () => handleGetBlockingStatus(),
@@ -678,7 +516,6 @@ export default defineBackground(() => {
       handleRemoveDomain(payload.domain, "deny"),
     SEARCH_DOMAIN: (payload) => handleSearchDomain(payload.domain),
     GET_QUERIES: (payload) => handleGetQueries(payload),
-    SAVE_CONFIG: (payload) => handleSaveConfig(payload),
     TEST_CONNECTION: (payload) => handleTestConnection(payload.url),
     HEALTH_CHECK: () => ({
       success: true,
@@ -688,8 +525,6 @@ export default defineBackground(() => {
         version: "0.0.4",
       },
     }),
-    INSTANCES_UPDATED: () => ({ success: true }),
-    // Multi-instance handlers
     GET_INSTANCES: () => handleGetInstances(),
     ADD_INSTANCE: (payload) => handleAddInstance(payload),
     UPDATE_INSTANCE: (payload) => handleUpdateInstance(payload),
@@ -700,20 +535,29 @@ export default defineBackground(() => {
     DISCONNECT_INSTANCE: (payload) =>
       handleDisconnectInstance(payload.instanceId),
     GET_INSTANCE_STATE: (payload) => handleGetInstanceState(payload.instanceId),
-    GET_AGGREGATED_STATE: () => handleGetAggregatedState(),
     CHECK_PASSWORD_AVAILABLE: (payload) =>
       handleCheckPasswordAvailable(payload),
     CREATE_TEMPORARY_ALLOWS: (payload) => handleCreateTemporaryAllows(payload),
     GET_TEMPORARY_ALLOWS: () => handleGetTemporaryAllows(),
     REMOVE_TEMPORARY_ALLOWS: (payload) => handleRemoveTemporaryAllows(payload),
-    TEMPORARY_ALLOWS_UPDATED: () => ({ success: true }),
   };
 
+  const dispatchCommand = createCommandDispatcher(messageHandlers, () =>
+    initializationGate.wait(),
+  );
+
+  const receiveRuntimeStorageCommandSignal =
+    createRuntimeStorageCommandSignalReceiver({
+      storage: browser.storage.local,
+      dispatch: dispatchCommand,
+      onError: (error) =>
+        logger.error("[Background] Runtime storage command failed:", error),
+    });
+
   async function handleMessage(
-    message: Message,
+    message: CommandMessage,
     sender: browser.Runtime.MessageSender,
   ): Promise<MessageResponse<unknown>> {
-    // Validate message origin to prevent spoofed messages from other extensions
     if (sender.id !== browser.runtime.id) {
       logger.warn(
         "[Background] Rejected message from unauthorized sender:",
@@ -722,161 +566,75 @@ export default defineBackground(() => {
       return { success: false, error: "Unauthorized" };
     }
 
-    logger.debug("[Background] handleMessage called with type:", message.type);
-
-    const handler = messageHandlers[message.type];
-    if (!handler) {
-      logger.error("[Background] Unknown message type:", message.type);
-      return { success: false, error: ERROR_MESSAGES.UNKNOWN_ERROR };
-    }
-
-    try {
-      // Type assertion: handlers are responsible for payload type safety
-      const result = await handler((message as any).payload, sender);
-      logger.info(
-        "[Background] handleMessage completed for type:",
-        message.type,
-      );
-      return result;
-    } catch (error) {
-      const appError = ErrorHandler.handle(
-        error,
-        `Message handler: ${message.type}`,
-        ErrorType.INTERNAL,
-      );
-      logger.error("[Background] Message handler error:", error);
-      return { success: false, error: appError.message };
-    }
+    logger.debug("[Background] dispatching command:", message.type);
+    return dispatchCommand(message);
+  }
+  function isCommandMessage(message: unknown): message is CommandMessage {
+    return (
+      message !== null &&
+      typeof message === "object" &&
+      "type" in message &&
+      typeof message.type === "string" &&
+      message.type in messageHandlers
+    );
   }
 
   // ===== Message Handlers =====
 
-  async function handleAuthenticate(payload: {
-    password: string;
-    totp?: string;
-  }): Promise<MessageResponse<{ totpRequired?: boolean }>> {
-    // Reset circuit breaker on manual connect attempt - user is explicitly trying
-    resetLegacyAuthFailures();
-
-    const result = await authManager.authenticate(
-      payload.password,
-      payload.totp,
-    );
-
-    if (result.success) {
-      store.setState({
-        isConnected: true,
-        connectionError: null,
-        totpRequired: false,
-      });
-      await refreshStats();
-      await startStatsPolling();
-      return { success: true };
-    }
-
-    if (result.totpRequired) {
-      store.setState({ totpRequired: true });
-      return {
-        success: false,
-        data: { totpRequired: true },
-        error: "TOTP required",
-      };
-    }
-
-    store.setState({
-      isConnected: false,
-      connectionError: formatAuthError(result.error),
-    });
-    return { success: false, error: formatAuthError(result.error) };
-  }
-
-  async function handleLogout(): Promise<MessageResponse<void>> {
-    await authManager.logout();
-    await stopStatsPolling();
-    store.reset();
-    await badgeService.clear();
-
-    // Clean up storage-based communication artifacts (best effort)
-    try {
-      await browser.storage.local.remove([
-        "authResponse",
-        "configResponse",
-        "logoutResponse",
-        "testConnectionResponse",
-        "addInstanceResponse",
-        "updateInstanceResponse",
-        "pendingAuth",
-        "pendingConfig",
-        "pendingLogout",
-        "pendingTestConnection",
-        "pendingAddInstance",
-        "pendingUpdateInstance",
-      ]);
-    } catch (error) {
-      logger.warn("[PiSentinel] Failed to clean up storage artifacts:", error);
-      // Continue with logout - cleanup failure is non-critical
-    }
-
-    return { success: true };
-  }
-
   /**
-   * Get the API client for the active instance, or fall back to legacy client.
+   * Returns the selected multi-instance client. Mutating Pi-hole operations
+   * intentionally require a selection instead of falling back to a singleton.
    */
-  function getActiveClient() {
+  function getActiveClient(): PiholeApiClient | null {
     const activeId = store.getActiveInstanceId();
-    return activeId ? apiClientManager.getClient(activeId) : apiClient;
+    return activeId ? clientRegistry.getClient(activeId) : null;
   }
 
-  async function handleGetStats(): Promise<
-    MessageResponse<ExtensionState["stats"]>
-  > {
-    const client = getActiveClient();
-    const result = await client.getStats();
-    if (result.success && result.data) {
-      store.setState({
-        stats: result.data,
-        statsLastUpdated: Date.now(),
-      });
-      return { success: true, data: result.data };
-    }
-    return { success: false, error: result.error?.message };
+  async function handleGetStats(): Promise<MessageResponse<StatsSummary>> {
+    await instanceRuntime.refreshStats();
+    const stats = store.getState().stats;
+    return stats
+      ? { success: true, data: stats }
+      : { success: false, error: "No statistics available" };
   }
 
   async function handleGetBlockingStatus(): Promise<
     MessageResponse<{ blocking: boolean; timer: number | null }>
   > {
-    const client = getActiveClient();
-    const result = await client.getBlockingStatus();
-    if (result.success && result.data) {
-      const enabled = result.data.blocking === "enabled";
-      store.setState({
-        blockingEnabled: enabled,
-        blockingTimer: result.data.timer,
-      });
+    const activeId = store.getActiveInstanceId();
+    if (!activeId) {
+      return { success: false, error: "Select an instance first" };
+    }
+
+    const result = await instanceRuntime.getBlockingStatus(activeId);
+    if (result.ok) {
       return {
         success: true,
-        data: { blocking: enabled, timer: result.data.timer },
+        data: {
+          blocking: result.status.blocking === "enabled",
+          timer: result.status.timer,
+        },
       };
     }
-    return { success: false, error: result.error?.message };
+    return { success: false, error: result.message };
   }
 
   async function handleSetBlocking(payload: {
     enabled: boolean;
     timer?: number;
   }): Promise<MessageResponse<{ blocking: boolean; timer: number | null }>> {
-    const client = getActiveClient();
-    const result = await client.setBlocking(payload.enabled, payload.timer);
+    const activeId = store.getActiveInstanceId();
+    if (!activeId) {
+      return { success: false, error: "Select an instance first" };
+    }
 
-    if (result.success && result.data) {
-      const enabled = result.data.blocking === "enabled";
-      store.setState({
-        blockingEnabled: enabled,
-        blockingTimer: result.data.timer,
-      });
-
-      // Show notification
+    const result = await instanceRuntime.setBlocking(
+      activeId,
+      payload.enabled,
+      payload.timer,
+    );
+    if (result.ok) {
+      const enabled = result.status.blocking === "enabled";
       if (enabled) {
         await notificationService.showBlockingEnabled();
       } else {
@@ -885,11 +643,11 @@ export default defineBackground(() => {
 
       return {
         success: true,
-        data: { blocking: enabled, timer: result.data.timer },
+        data: { blocking: enabled, timer: result.status.timer },
       };
     }
 
-    return { success: false, error: result.error?.message };
+    return { success: false, error: result.message };
   }
 
   function handleGetTabDomains(
@@ -905,6 +663,9 @@ export default defineBackground(() => {
     comment?: string,
   ): Promise<MessageResponse<void>> {
     const client = getActiveClient();
+    if (!client) {
+      return { success: false, error: "Select an instance first" };
+    }
     const result = await client.addDomain(domain, listType, "exact", comment);
 
     if (result.success) {
@@ -920,252 +681,32 @@ export default defineBackground(() => {
     listType: "allow" | "deny",
   ): Promise<MessageResponse<void>> {
     const client = getActiveClient();
+    if (!client) {
+      return { success: false, error: "Select an instance first" };
+    }
     const result = await client.removeDomain(domain, listType, "exact");
     return result.success
       ? { success: true }
       : { success: false, error: result.error?.message };
   }
 
-  async function handleSearchDomain(domain: string): Promise<
-    MessageResponse<{
-      gravity: boolean;
-      allowlist: boolean;
-      denylist: boolean;
-      instances?: Array<{
-        instanceId: string;
-        instanceName?: string;
-        gravity: boolean;
-        allowlist: boolean;
-        denylist: boolean;
-      }>;
-    }>
-  > {
-    const activeId = store.getActiveInstanceId();
-
-    const parseResult = (raw: unknown) => {
-      const data = raw as Record<string, unknown>;
-      const searchData = (data.search as Record<string, unknown>) || data;
-      const gravity = searchData.gravity;
-      const domains = searchData.domains as unknown[];
-
-      const gravityCount = Array.isArray(gravity) ? gravity.length : 0;
-      const allowlist = Array.isArray(domains)
-        ? domains.filter((d: any) => d.type === "allow")
-        : [];
-      const denylist = Array.isArray(domains)
-        ? domains.filter((d: any) => d.type === "deny")
-        : [];
-
-      return {
-        gravity: gravityCount > 0,
-        allowlist: allowlist.length > 0,
-        denylist: denylist.length > 0,
-      };
-    };
-
-    // Single-instance mode
-    if (activeId) {
-      const client = apiClientManager.getClient(activeId);
-      const result = await client.searchDomain(domain);
-
-      if (result.success && result.data) {
-        const parsed = parseResult(result.data);
-        const instance = await instanceManager.getInstance(activeId);
-        return {
-          success: true,
-          data: {
-            ...parsed,
-            instances: [
-              {
-                instanceId: activeId,
-                instanceName: instance
-                  ? instanceManager.getDisplayName(instance)
-                  : undefined,
-                ...parsed,
-              },
-            ],
-          },
-        };
-      }
-
-      return { success: false, error: result.error?.message };
-    }
-
-    // "All" mode - query all connected instances
-    const config = await instanceManager.getInstances();
-    const connectedInstances = config.instances.filter((instance) => {
-      const state = store.getInstanceState(instance.id);
-      return state?.isConnected;
-    });
-
-    const results: Array<{
-      instanceId: string;
-      instanceName?: string;
-      gravity: boolean;
-      allowlist: boolean;
-      denylist: boolean;
-    }> = [];
-
-    for (const instance of connectedInstances) {
-      try {
-        const client = apiClientManager.getClient(instance.id);
-        const result = await client.searchDomain(domain);
-
-        if (result.success && result.data) {
-          const parsed = parseResult(result.data);
-          results.push({
-            instanceId: instance.id,
-            instanceName: instanceManager.getDisplayName(instance),
-            ...parsed,
-          });
-        } else {
-          logger.warn(
-            `[Background] Search failed for instance ${instance.id}:`,
-            result.error?.message,
-          );
-        }
-      } catch (error) {
-        logger.warn(
-          `[Background] Error searching domain for instance ${instance.id}:`,
-          error,
-        );
-      }
-    }
-
-    const aggregated = {
-      gravity: results.some((r) => r.gravity),
-      allowlist: results.some((r) => r.allowlist),
-      denylist: results.some((r) => r.denylist),
-      instances: results,
-    };
-
-    return { success: true, data: aggregated };
+  async function handleSearchDomain(
+    domain: string,
+  ): Promise<MessageResponse<FleetResult<DomainSearchEntry>>> {
+    return { success: true, data: await fleetQueries.searchDomain(domain) };
   }
 
   async function handleGetQueries(payload?: {
     length?: number;
     from?: number;
-  }): Promise<MessageResponse<QueryEntry[]>> {
-    const activeId = store.getActiveInstanceId();
-
-    const normalizeQueries = (data: unknown): QueryEntry[] => {
-      const raw = Array.isArray(data) ? data : (data as any)?.queries || [];
-      return raw.map((q: any) => {
-        const timestamp =
-          typeof q.timestamp === "number"
-            ? q.timestamp
-            : typeof q.time === "number"
-              ? q.time
-              : Number(q.timestamp ?? q.time ?? 0) || 0;
-        return {
-          ...q,
-          timestamp,
-          id: q.id ?? `${q.domain ?? "unknown"}-${timestamp}`,
-        };
-      });
-    };
-
-    const attachInstanceMeta = (
-      queries: QueryEntry[],
-      instanceId: string | null,
-      instanceName?: string,
-    ) =>
-      queries.map((q) => ({
-        ...q,
-        id: q.id ?? `${instanceId || "all"}-${q.timestamp}-${q.domain}`,
-        instanceId: instanceId || undefined,
-        instanceName,
-      }));
-
-    // Single instance mode
-    if (activeId) {
-      const client = apiClientManager.getClient(activeId);
-      const result = await client.getQueries(payload);
-
-      if (result.success && result.data) {
-        const instance = await instanceManager.getInstance(activeId);
-        const instanceName = instance
-          ? instanceManager.getDisplayName(instance)
-          : undefined;
-        const data = attachInstanceMeta(
-          normalizeQueries(result.data),
-          activeId,
-          instanceName,
-        );
-        return { success: true, data };
-      }
-
-      return { success: false, error: result.error?.message };
-    }
-
-    // "All" mode - aggregate across connected instances
-    const config = await instanceManager.getInstances();
-    const connectedInstances = config.instances.filter((instance) => {
-      const state = store.getInstanceState(instance.id);
-      return state?.isConnected;
-    });
-
-    const aggregated: QueryEntry[] = [];
-
-    for (const instance of connectedInstances) {
-      try {
-        const client = apiClientManager.getClient(instance.id);
-        const result = await client.getQueries(payload);
-
-        if (result.success && result.data) {
-          const queries = attachInstanceMeta(
-            normalizeQueries(result.data),
-            instance.id,
-            instanceManager.getDisplayName(instance),
-          );
-          aggregated.push(...queries);
-        } else {
-          logger.warn(
-            `[Background] Failed to load queries for instance ${instance.id}:`,
-            result.error?.message,
-          );
-        }
-      } catch (error) {
-        logger.warn(
-          `[Background] Error loading queries for instance ${instance.id}:`,
-          error,
-        );
-      }
-    }
-
-    aggregated.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    return { success: true, data: aggregated };
-  }
-
-  async function handleSaveConfig(payload: {
-    piholeUrl: string;
-    password: string;
-    notificationsEnabled?: boolean;
-    refreshInterval?: number;
-    rememberPassword?: boolean;
-  }): Promise<MessageResponse<void>> {
-    try {
-      await authManager.saveConfig(payload.piholeUrl, payload.password, {
-        notificationsEnabled: payload.notificationsEnabled,
-        refreshInterval: payload.refreshInterval,
-        rememberPassword: payload.rememberPassword,
-      });
-
-      notificationService.setEnabled(payload.notificationsEnabled ?? true);
-      return { success: true };
-    } catch (error) {
-      logger.error("[Background] Error in handleSaveConfig:", error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Failed to save config",
-      };
-    }
+  }): Promise<MessageResponse<FleetResult<FleetQueryEntry>>> {
+    return { success: true, data: await fleetQueries.recentQueries(payload) };
   }
 
   async function handleTestConnection(
     url: string,
   ): Promise<MessageResponse<void>> {
-    const result = await apiClient.testConnection(url);
+    const result = await new PiholeApiClient({ baseUrl: url }).testConnection();
     return result.success
       ? { success: true }
       : { success: false, error: formatConnectionError(result.error) };
@@ -1206,54 +747,7 @@ export default defineBackground(() => {
     rememberPassword: boolean;
   }): Promise<MessageResponse<unknown>> {
     try {
-      const instance = await instanceManager.addInstance(
-        payload.name,
-        payload.piholeUrl,
-        payload.password,
-        payload.rememberPassword,
-      );
-
-      // Configure API client for this instance
-      const client = apiClientManager.configureClient(
-        instance.id,
-        instance.piholeUrl,
-      );
-
-      // Set up re-auth handler
-      apiClientManager.setAuthHandler(instance.id, async () => {
-        // Circuit breaker: stop auto-retry if too many consecutive failures
-        if (isInstanceCircuitBreakerOpen(instance.id)) {
-          logger.warn(
-            `[PiSentinel] Auth circuit breaker open for instance ${instance.id} - skipping auto-retry`,
-          );
-          return false;
-        }
-
-        const password = await instanceManager.getDecryptedPassword(
-          instance.id,
-        );
-        if (password !== null) {
-          // Logout first to prevent ghost sessions
-          if (client.hasSession()) {
-            try {
-              await client.logout();
-            } catch {
-              // Continue with re-auth
-            }
-          }
-          const result = await client.authenticate(password);
-          if (result.success) {
-            resetInstanceAuthFailures(instance.id);
-            return true;
-          }
-          incrementInstanceAuthFailures(instance.id);
-        }
-        return false;
-      });
-
-      const config = await instanceManager.getInstances();
-      store.setActiveInstanceId(config.activeInstanceId);
-      await broadcastInstancesUpdated();
+      const instance = await instanceRuntime.add(payload);
       return { success: true, data: instance };
     } catch (error) {
       logger.error("[Background] Error adding instance:", error);
@@ -1273,29 +767,10 @@ export default defineBackground(() => {
     rememberPassword?: boolean;
   }): Promise<MessageResponse<unknown>> {
     try {
-      const instance = await instanceManager.updateInstance(
-        payload.instanceId,
-        {
-          name: payload.name,
-          piholeUrl: payload.piholeUrl,
-          password: payload.password,
-          rememberPassword: payload.rememberPassword,
-        },
-      );
+      const instance = await instanceRuntime.update(payload);
+      if (!instance) return { success: false, error: "Instance not found" };
 
-      if (!instance) {
-        return { success: false, error: "Instance not found" };
-      }
-
-      // Update API client URL if changed
-      if (payload.piholeUrl) {
-        apiClientManager.configureClient(instance.id, instance.piholeUrl);
-      }
-
-      if (store.getActiveInstanceId() === instance.id) {
-        await refreshInstanceStats(instance.id);
-      }
-
+      await instanceRuntime.refreshStats();
       await broadcastInstancesUpdated();
       return { success: true, data: instance };
     } catch (error) {
@@ -1311,27 +786,10 @@ export default defineBackground(() => {
   async function handleDeleteInstance(
     instanceId: string,
   ): Promise<MessageResponse<void>> {
-    logger.debug(`[Background] handleDeleteInstance called for: ${instanceId}`);
     try {
-      const deleted = await instanceManager.deleteInstance(instanceId);
-      logger.debug(
-        `[Background] instanceManager.deleteInstance returned: ${deleted}`,
-      );
-
-      if (!deleted) {
-        logger.warn(`[Background] Instance not found: ${instanceId}`);
+      if (!(await instanceRuntime.remove(instanceId))) {
         return { success: false, error: "Instance not found" };
       }
-
-      // Clean up API client and state
-      apiClientManager.removeClient(instanceId);
-      store.removeInstanceState(instanceId);
-
-      const config = await instanceManager.getInstances();
-      store.setActiveInstanceId(config.activeInstanceId);
-      logger.debug(`[Background] About to broadcast instances updated`);
-      await broadcastInstancesUpdated();
-      logger.debug(`[Background] Broadcast complete, returning success`);
       return { success: true };
     } catch (error) {
       logger.error("[Background] Error deleting instance:", error);
@@ -1346,57 +804,19 @@ export default defineBackground(() => {
   async function handleSetActiveInstance(
     instanceId: string | null,
   ): Promise<MessageResponse<void>> {
-    // BUG-4: Mark instances as transitioning to prevent concurrent refresh
-    const transitionIds: string[] = [];
     try {
-      if (instanceId === null) {
-        const config = await instanceManager.getInstances();
-        config.instances.forEach((i) => {
-          instancesInTransition.add(i.id);
-          transitionIds.push(i.id);
-        });
-      } else {
-        instancesInTransition.add(instanceId);
-        transitionIds.push(instanceId);
-      }
-
-      await instanceManager.setActiveInstance(instanceId);
-      store.setActiveInstanceId(instanceId);
-
-      // Return immediately — heavy work (auto-connect, stats refresh, broadcast)
-      // runs fire-and-forget so the UI gets a fast response
-      const doPostWork = async () => {
-        try {
-          if (instanceId === null) {
-            const config = await instanceManager.getInstances();
-            for (const instance of config.instances) {
-              await tryAutoConnect(instance.id);
-            }
-          } else {
-            await tryAutoConnect(instanceId);
-
-            if (
-              store.getInstanceState(instanceId)?.isConnected &&
-              !store.isCacheValid(instanceId)
-            ) {
-              await refreshInstanceStats(instanceId);
-            }
-          }
-
-          await broadcastInstancesUpdated();
-        } catch (err) {
-          logger.error("[Background] Post-setActive work failed:", err);
-        } finally {
-          transitionIds.forEach((id) => instancesInTransition.delete(id));
-        }
-      };
-      doPostWork();
-
+      await instanceRuntime.select(instanceId);
+      void instanceRuntime
+        .refreshStats()
+        .catch((error) =>
+          logger.error(
+            "[Background] Post-selection stats refresh failed:",
+            error,
+          ),
+        );
       return { success: true };
     } catch (error) {
       logger.error("[Background] Error setting active instance:", error);
-      // Clear transition flags on error (success path clears in doPostWork)
-      transitionIds.forEach((id) => instancesInTransition.delete(id));
       return {
         success: false,
         error:
@@ -1408,23 +828,9 @@ export default defineBackground(() => {
   }
 
   async function tryAutoConnect(instanceId: string): Promise<void> {
-    try {
-      const currentState = store.getInstanceState(instanceId);
-      if (currentState?.isConnected) {
-        return;
-      }
-
-      const password = await instanceManager.getDecryptedPassword(instanceId);
-      if (password === null) {
-        return;
-      }
-
-      const response = await handleConnectInstance({ instanceId, password });
-      if (!response.success) {
-        logger.debug("[Background] Auto-connect failed:", response.error);
-      }
-    } catch (error) {
-      logger.debug("[Background] Auto-connect error:", error);
+    const result = await instanceRuntime.connect({ instanceId });
+    if (!result.ok && !result.totpRequired) {
+      logger.debug("[Background] Auto-connect failed:", result.message);
     }
   }
 
@@ -1432,176 +838,35 @@ export default defineBackground(() => {
     instanceId: string;
     password?: string;
     totp?: string;
-  }): Promise<MessageResponse<{ totpRequired?: boolean }>> {
-    try {
-      const instance = await instanceManager.getInstance(payload.instanceId);
-      if (!instance) {
-        return { success: false, error: "Instance not found" };
-      }
-
-      // Reset circuit breaker on manual connect attempt - user is explicitly trying
-      resetInstanceAuthFailures(instance.id);
-
-      // Skip if already connected and no new credentials provided
-      // This prevents duplicate sessions from race conditions (e.g., init + UI connect)
-      const currentState = store.getInstanceState(instance.id);
-      const session = await getInstanceSession(instance.id);
-      if (
-        currentState?.isConnected &&
-        session &&
-        session.expiresAt > Date.now() &&
-        payload.password === undefined &&
-        payload.totp === undefined
-      ) {
-        logger.debug(
-          `[PiSentinel] Instance ${instance.id} already connected, skipping re-auth`,
-        );
-        return { success: true };
-      }
-
-      // Get or create API client for this instance
-      const client = apiClientManager.configureClient(
-        instance.id,
-        instance.piholeUrl,
-      );
-
-      const password =
-        payload.password !== undefined
-          ? payload.password
-          : await instanceManager.getDecryptedPassword(instance.id);
-
-      if (password === null) {
-        const errorMessage =
-          "No saved password for this one. Edit it to add one (or leave it blank if it doesn't need one).";
-        store.updateInstanceState(instance.id, {
-          isConnected: false,
-          connectionError: errorMessage,
-          totpRequired: false,
-        });
-        return { success: false, error: errorMessage };
-      }
-
-      // Invalidate old session before creating new one to prevent ghost sessions
-      if (client.hasSession()) {
-        try {
-          await client.logout();
-        } catch {
-          logger.debug(
-            `[PiSentinel] Failed to logout before connect for ${instance.id}`,
-          );
-        }
-      }
-
-      // Authenticate
-      const result = await client.authenticate(password, payload.totp);
-
-      if (!result.success) {
-        if (isTotpChallenge(result.error, payload.totp)) {
-          store.updateInstanceState(instance.id, { totpRequired: true });
-          return {
-            success: false,
-            data: { totpRequired: true },
-            error: "TOTP required",
-          };
-        }
-        const errorMessage = formatConnectionError(result.error);
-        store.updateInstanceState(instance.id, {
-          isConnected: false,
-          connectionError: errorMessage,
-        });
-        return { success: false, error: errorMessage };
-      }
-
-      if (result.data?.session) {
-        // A session response is final: `session.totp` only reports account 2FA
-        // capability and does not require another authentication step.
-
-        // Store session
-        await storeInstanceSession(
-          instance.id,
-          result.data.session.sid,
-          result.data.session.csrf,
-          result.data.session.validity,
-        );
-
-        // Update state
-        store.updateInstanceState(instance.id, {
-          isConnected: true,
-          connectionError: null,
-          totpRequired: false,
-        });
-
-        // Fetch stats fire-and-forget so the UI gets a fast response
-        refreshInstanceStats(instance.id).catch((err) =>
-          logger.error("[Background] Post-connect stats refresh failed:", err),
-        );
-
-        return { success: true };
-      }
-
-      return { success: false, error: "Invalid response from Pi-hole" };
-    } catch (error) {
-      logger.error("[Background] Error connecting instance:", error);
-      return {
-        success: false,
-        error:
-          error instanceof Error ? error.message : "Failed to connect instance",
-      };
+  }): Promise<MessageResponse<{ kind: "connected" | "totp-required" }>> {
+    const result = await instanceRuntime.connect(payload);
+    if (result.ok) return { success: true, data: { kind: "connected" } };
+    if (result.totpRequired) {
+      return { success: true, data: { kind: "totp-required" } };
     }
+    return {
+      success: false,
+      error:
+        result.error ??
+        classifyConnectInstanceFailure({ message: result.message }),
+    };
   }
 
   async function handleDisconnectInstance(
     instanceId: string,
   ): Promise<MessageResponse<void>> {
-    const MAX_RETRIES = 3;
-    let lastError: Error | null = null;
-    let logoutSucceeded = false;
-
-    const client = apiClientManager.getClient(instanceId);
-
-    // Retry logout with exponential backoff
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        const result = await client.logout();
-        if (result.success) {
-          logoutSucceeded = true;
-          break;
-        }
-        // Retry on failure
-        if (attempt < MAX_RETRIES - 1) {
-          await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
-        }
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        if (attempt < MAX_RETRIES - 1) {
-          await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
-        }
-      }
-    }
-
-    // Always clear local state - user wants to disconnect
     try {
-      const sessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
-      await browser.storage.session.remove(sessionKey);
-      store.resetInstanceState(instanceId);
-
-      // CRITICAL: Broadcast state change to update UI (was missing - caused stale "Connected" status)
-      await broadcastInstancesUpdated();
+      await instanceRuntime.disconnect(instanceId);
+      return { success: true };
     } catch (error) {
-      logger.error("[Background] Error clearing disconnect state:", error);
-      // Still return success - the API logout may have worked
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to disconnect instance",
+      };
     }
-
-    if (!logoutSucceeded) {
-      logger.warn(
-        `[Background] Logout may have failed after ${MAX_RETRIES} attempts for ${instanceId}`,
-        lastError,
-      );
-      // Still return success since local state is cleared
-      // The server-side session will expire naturally
-    }
-
-    return { success: true };
   }
 
   function handleGetInstanceState(
@@ -1612,33 +877,6 @@ export default defineBackground(() => {
       return { success: false, error: "Instance state not found" };
     }
     return { success: true, data: state };
-  }
-
-  async function handleGetAggregatedState(): Promise<MessageResponse<unknown>> {
-    try {
-      const config = await instanceManager.getInstances();
-
-      // Build instance names map
-      const instanceNames = new Map<string, string>();
-      for (const instance of config.instances) {
-        instanceNames.set(
-          instance.id,
-          instanceManager.getDisplayName(instance),
-        );
-      }
-
-      const aggregatedState = store.getAggregatedState(instanceNames);
-      return { success: true, data: aggregatedState };
-    } catch (error) {
-      logger.error("[Background] Error getting aggregated state:", error);
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to get aggregated state",
-      };
-    }
   }
 
   /**
@@ -1664,9 +902,7 @@ export default defineBackground(() => {
     }
   }
   async function waitForInstanceClients(): Promise<void> {
-    if (initializationPromise) {
-      await initializationPromise;
-    }
+    await initializationGate.wait();
   }
 
   async function handleCreateTemporaryAllows(
@@ -1716,37 +952,11 @@ export default defineBackground(() => {
   }
   // ===== Stats Polling =====
 
-  async function refreshStats(): Promise<void> {
-    const client = getActiveClient();
-    const result = await client.getStats();
-    if (result.success && result.data) {
-      store.setState({
-        stats: result.data,
-        statsLastUpdated: Date.now(),
-      });
-    }
-
-    // Also refresh blocking status
-    const blockingResult = await client.getBlockingStatus();
-    if (blockingResult.success && blockingResult.data) {
-      store.setState({
-        blockingEnabled: blockingResult.data.blocking === "enabled",
-        blockingTimer: blockingResult.data.timer,
-      });
-    }
-  }
-
   async function startStatsPolling(): Promise<void> {
-    const config = await authManager.getConfig();
-    const interval = config?.refreshInterval || DEFAULTS.REFRESH_INTERVAL;
-
+    const { globalSettings } = await instanceManager.getInstances();
     await browser.alarms.create(ALARMS.STATS_REFRESH, {
-      periodInMinutes: interval / 60, // Convert seconds to minutes
+      periodInMinutes: globalSettings.refreshInterval / 60,
     });
-  }
-
-  async function stopStatsPolling(): Promise<void> {
-    await browser.alarms.clear(ALARMS.STATS_REFRESH);
   }
 
   // ===== Alarm Handling =====
@@ -1767,185 +977,12 @@ export default defineBackground(() => {
     }
   }
 
-  /**
-   * Handle session keepalive for all instances.
-   */
   async function handleSessionKeepalive(): Promise<void> {
-    const config = await instanceManager.getInstances();
-
-    // If no instances, fall back to legacy auth manager
-    if (config.instances.length === 0) {
-      // Circuit breaker check for legacy mode
-      if (isLegacyCircuitBreakerOpen()) {
-        logger.debug(
-          "[PiSentinel] Skipping legacy keepalive - auth circuit breaker open",
-        );
-        return;
-      }
-
-      const renewalSuccess = await authManager.renewSessionBeforeExpiry();
-      if (renewalSuccess) {
-        resetLegacyAuthFailures();
-        return;
-      }
-
-      const sessionValid = await authManager.handleKeepalive();
-      if (!sessionValid) {
-        const password = await authManager.getDecryptedPassword();
-        if (password !== null) {
-          const result = await authManager.authenticate(password);
-          if (result.success) {
-            resetLegacyAuthFailures();
-            store.setState({ isConnected: true });
-            return;
-          }
-          consecutiveAuthFailures++;
-          logger.warn(
-            `[PiSentinel] Legacy keepalive auth failed (${consecutiveAuthFailures}/${DEFAULTS.MAX_CONSECUTIVE_AUTH_FAILURES})`,
-          );
-          void persistSwState();
-        }
-        store.setState({ isConnected: false });
-        await notificationService.showConnectionError("Session expired");
-      }
-      return;
-    }
-
-    // Iterate through all instances
-    for (const instance of config.instances) {
-      try {
-        // Circuit breaker check for this instance
-        if (isInstanceCircuitBreakerOpen(instance.id)) {
-          logger.debug(
-            `[PiSentinel] Skipping keepalive for instance ${instance.id} - auth circuit breaker open`,
-          );
-          continue;
-        }
-
-        // SEC-3: Use encrypted session retrieval
-        const session = await getInstanceSession(instance.id);
-
-        if (!session) continue;
-
-        const client = apiClientManager.getClient(instance.id);
-
-        // BUG-3: Check if session is about to expire (within threshold)
-        // Use a longer threshold to account for slow network conditions
-        const timeUntilExpiry = session.expiresAt - Date.now();
-        const SAFE_THRESHOLD_MS = DEFAULTS.SESSION_RENEWAL_THRESHOLD * 1000;
-        const AGGRESSIVE_THRESHOLD_MS = SAFE_THRESHOLD_MS * 2; // 2x threshold for safety margin
-
-        if (timeUntilExpiry > AGGRESSIVE_THRESHOLD_MS) {
-          // Session still valid with good margin, just ping to extend
-          const result = await client.getStats();
-          if (result.success) {
-            // Update session expiry - also reset failures since session is working
-            resetInstanceAuthFailures(instance.id);
-            await storeInstanceSession(
-              instance.id,
-              session.sid,
-              session.csrf,
-              300,
-            );
-            continue;
-          }
-
-          // BUG-3: If ping failed (possibly expired during call), try to re-authenticate
-          if (result.error?.status === 401 || result.error?.status === 403) {
-            logger.debug(
-              `[PiSentinel] Session ping failed for ${instance.id}, attempting re-auth`,
-            );
-            // Fall through to re-authentication below
-          } else {
-            // Network error or other issue - keep trying
-            continue;
-          }
-        }
-
-        // Session about to expire or ping failed - proactively re-authenticate
-        const password = await instanceManager.getDecryptedPassword(
-          instance.id,
-        );
-        if (password !== null) {
-          // Invalidate old session before creating new one to prevent ghost sessions
-          try {
-            await client.logout();
-          } catch {
-            // Continue with re-auth even if logout fails
-            logger.debug(
-              `[PiSentinel] Failed to logout before session renewal for ${instance.id}`,
-            );
-          }
-
-          const result = await client.authenticate(password);
-          if (result.success && result.data?.session) {
-            resetInstanceAuthFailures(instance.id);
-            await storeInstanceSession(
-              instance.id,
-              result.data.session.sid,
-              result.data.session.csrf,
-              result.data.session.validity,
-            );
-            store.updateInstanceState(instance.id, { isConnected: true });
-            continue;
-          }
-          // Auth failed - increment failure counter
-          incrementInstanceAuthFailures(instance.id);
-        }
-
-        // Session expired and couldn't be renewed
-        store.updateInstanceState(instance.id, {
-          isConnected: false,
-          connectionError: "Session expired",
-        });
-      } catch (error) {
-        logger.error(
-          `[PiSentinel] Keepalive failed for instance ${instance.id}:`,
-          error,
-        );
-      }
-    }
+    await instanceRuntime.keepAlive();
   }
 
-  /**
-   * Handle stats refresh for all instances.
-   */
   async function handleStatsRefresh(): Promise<void> {
-    const config = await instanceManager.getInstances();
-
-    // If no instances, fall back to legacy refresh
-    if (config.instances.length === 0) {
-      if (await authManager.hasValidSession()) {
-        await refreshStats();
-      }
-      return;
-    }
-
-    // PERF-1: Refresh stats for all connected instances in parallel
-    const refreshPromises = config.instances
-      .filter((instance) => {
-        // BUG-4: Skip instances that are currently being transitioned
-        if (instancesInTransition.has(instance.id)) {
-          logger.debug(
-            `[PiSentinel] Skipping refresh for ${instance.id} - in transition`,
-          );
-          return false;
-        }
-
-        const state = store.getInstanceState(instance.id);
-        return state?.isConnected;
-      })
-      .map((instance) =>
-        refreshInstanceStats(instance.id).catch((error) => {
-          // Log but don't fail other refreshes
-          logger.error(
-            `[PiSentinel] Stats refresh failed for ${instance.id}:`,
-            error,
-          );
-        }),
-      );
-
-    await Promise.all(refreshPromises);
+    await instanceRuntime.refreshStats();
   }
 
   // ===== Event Listeners =====
@@ -1957,28 +994,46 @@ export default defineBackground(() => {
   // Returning a Promise directly is more reliable than sendResponse callback
   browser.runtime.onMessage.addListener(
     (message: unknown, sender: browser.Runtime.MessageSender) => {
+      if (isStorageCommandSignal(message, isCommandMessage)) {
+        if (sender.id !== browser.runtime.id) {
+          void browser.storage.local
+            .set({
+              [`pisentinel.command.response.${message.id}`]: {
+                id: message.id,
+                result: { success: false, error: "Unauthorized" },
+              },
+            })
+            .catch((error) =>
+              logger.error(
+                "[Background] Unable to reject runtime storage command:",
+                error,
+              ),
+            );
+        } else {
+          void receiveRuntimeStorageCommandSignal(message);
+        }
+        return Promise.resolve(undefined);
+      }
+      if (!isCommandMessage(message)) {
+        return Promise.resolve({ success: false, error: "Unknown command" });
+      }
       logger.info(
-        "[Background] Listener received message:",
-        (message as Message)?.type,
+        "[Background] Listener received command:",
+        message.type,
         "from:",
         sender.url?.substring(0, 50),
       );
 
-      // Return Promise directly - webextension-polyfill handles this correctly
-      return handleMessage(message as Message, sender)
-        .then((response) => {
-          logger.info(
-            "[Background] Returning response for",
-            (message as Message)?.type,
-            ":",
-            JSON.stringify(response)?.substring(0, 100),
-          );
-          return response;
-        })
-        .catch((error) => {
-          logger.error("[Background] Error handling message:", error);
-          return { success: false, error: error.message };
-        });
+      return handleMessage(message, sender).catch((error) => {
+        logger.error("[Background] Error handling command:", error);
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : ERROR_MESSAGES.UNKNOWN_ERROR,
+        };
+      });
     },
   );
   logger.debug("[Background] Message listener registered");
@@ -1987,6 +1042,7 @@ export default defineBackground(() => {
   // Wrap to prevent alarm errors from crashing the background script
   browser.alarms.onAlarm.addListener(async (alarm) => {
     try {
+      await initializationGate.wait();
       await handleAlarm(alarm);
     } catch (error) {
       logger.error(
@@ -1999,122 +1055,19 @@ export default defineBackground(() => {
     }
   });
 
-  // WORKAROUND: Listen for storage changes for config saves and auth (browser.runtime.sendMessage is broken)
-  // Configuration for storage-based request handlers
-  type StorageRequestConfig = {
-    responseKey: string;
-    handler: (payload: any) => Promise<MessageResponse<any>>;
-  };
-
-  const storageRequests: Record<string, StorageRequestConfig> = {
-    pendingConfig: {
-      responseKey: "configResponse",
-      handler: (payload) =>
-        handleSaveConfig({
-          piholeUrl: payload.url,
-          password: payload.password,
-          rememberPassword: payload.rememberPassword,
-        }),
-    },
-    pendingAuth: {
-      responseKey: "authResponse",
-      handler: (payload) =>
-        handleAuthenticate({
-          password: payload.password,
-          totp: payload.totp,
-        }),
-    },
-    pendingTestConnection: {
-      responseKey: "testConnectionResponse",
-      handler: (payload) => handleTestConnection(payload.url),
-    },
-    pendingLogout: {
-      responseKey: "logoutResponse",
-      handler: () => handleLogout(),
-    },
-    pendingAddInstance: {
-      responseKey: "addInstanceResponse",
-      handler: (payload) => handleAddInstance(payload),
-    },
-    pendingUpdateInstance: {
-      responseKey: "updateInstanceResponse",
-      handler: (payload) => handleUpdateInstance(payload),
-    },
-    pendingGetInstances: {
-      responseKey: "getInstancesResponse",
-      handler: () => handleGetInstances(),
-    },
-    pendingDeleteInstance: {
-      responseKey: "deleteInstanceResponse",
-      handler: (payload) => handleDeleteInstance(payload.instanceId),
-    },
-    pendingConnectInstance: {
-      responseKey: "connectInstanceResponse",
-      handler: (payload) => handleConnectInstance(payload),
-    },
-    pendingDisconnectInstance: {
-      responseKey: "disconnectInstanceResponse",
-      handler: (payload) => handleDisconnectInstance(payload.instanceId),
-    },
-    pendingSetActiveInstance: {
-      responseKey: "setActiveInstanceResponse",
-      handler: (payload) => handleSetActiveInstance(payload.instanceId),
-    },
-    pendingGetInstanceState: {
-      responseKey: "getInstanceStateResponse",
-      handler: (payload) => handleGetInstanceState(payload.instanceId),
-    },
-    pendingCheckPasswordAvailable: {
-      responseKey: "checkPasswordAvailableResponse",
-      handler: (payload) => handleCheckPasswordAvailable(payload),
-    },
-  };
-
-  // Generic storage request handler
-  browser.storage.onChanged.addListener(async (changes, areaName) => {
-    logger.debug(
-      `[Background] Storage changed: area=${areaName}, keys=${Object.keys(changes).join(", ")}`,
-    );
-    if (areaName !== "local") return;
-
-    for (const [requestKey, config] of Object.entries(storageRequests)) {
-      if (changes[requestKey]?.newValue) {
-        const payload = changes[requestKey].newValue;
-        logger.info(`[Background] Processing storage request: ${requestKey}`);
-
-        try {
-          const response = await config.handler(payload);
-          await browser.storage.local.set({
-            [config.responseKey]: {
-              ...response,
-              _requestId: payload._requestId,
-            },
-          });
-          logger.debug(`[Background] ${requestKey} processed successfully`);
-        } catch (error) {
-          logger.error(`[Background] Error processing ${requestKey}:`, error);
-          await browser.storage.local.set({
-            [config.responseKey]: {
-              success: false,
-              error:
-                error instanceof Error
-                  ? error.message
-                  : ERROR_MESSAGES.UNKNOWN_ERROR,
-              _requestId: payload._requestId,
-            },
-          });
-        } finally {
-          // Always remove the pending request key to prevent stuck requests
-          await browser.storage.local.remove(requestKey);
-        }
-      }
-    }
+  // Firefox options pages use this storage transport when runtime responses
+  // are unavailable. The receiver claims and removes each request before
+  // dispatching, so repeated Firefox storage notifications cannot replay it.
+  registerStorageCommandReceiver({
+    browser,
+    dispatch: dispatchCommand,
+    isCommand: isCommandMessage,
+    onError: (error) =>
+      logger.error("[Background] Storage command failed:", error),
   });
-
-  // Initialize on startup
+  // Initialize on install
   browser.runtime.onStartup.addListener(initialize);
 
-  // Initialize on install
   browser.runtime.onInstalled.addListener(async (details) => {
     logger.info("PiSentinel: Extension installed/updated", details.reason);
     await initialize();

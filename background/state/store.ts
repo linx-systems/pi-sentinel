@@ -4,6 +4,7 @@ import { logger } from "~/utils/logger";
 import { ErrorHandler, ErrorType } from "~/utils/error-handler";
 import { DEFAULTS } from "~/utils/constants";
 import type {
+  BlockingStatus,
   AggregatedState,
   CachedData,
   ExtensionState,
@@ -26,9 +27,6 @@ import type {
 type StateListener = (state: ExtensionState) => void;
 
 class StateStore {
-  // Legacy single-instance state (for backwards compatibility)
-  private state: ExtensionState;
-
   // Multi-instance state
   private instanceStates: Map<string, InstanceState> = new Map();
   private instanceCaches: Map<string, CachedData<StatsSummary>> = new Map();
@@ -45,13 +43,7 @@ class StateStore {
   // Mutex prevents race conditions during concurrent state updates
   private updateLock: Promise<void> = Promise.resolve();
 
-  // Debounce timer for "All" mode broadcasts to batch parallel instance updates
-  private broadcastDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly BROADCAST_DEBOUNCE_MS = 150;
-
-  constructor() {
-    this.state = this.getInitialState();
-  }
+  // State transitions serialize mutation and publication together.
 
   /**
    * Acquire lock for state updates via promise chaining.
@@ -84,14 +76,14 @@ class StateStore {
     }
   }
 
-  // ===== Legacy API (backwards compatibility) =====
+  // ===== External state projection =====
 
   /**
    * Get current state (immutable copy).
    * Returns state for active instance, or aggregated state if in "All" mode.
    */
   getState(): ExtensionState {
-    // If we have an active instance, return its state
+    const initialState = this.getInitialState();
     if (this.activeInstanceId) {
       const instanceState = this.instanceStates.get(this.activeInstanceId);
       if (instanceState) {
@@ -99,113 +91,169 @@ class StateStore {
       }
     }
 
-    // If in "All" mode with multiple instances, return aggregated state
-    if (this.instanceStates.size > 0) {
-      const connectedStates = Array.from(this.instanceStates.values()).filter(
-        (s) => s.isConnected,
-      );
+    if (this.instanceStates.size === 0) {
+      return initialState;
+    }
 
-      if (connectedStates.length > 0) {
-        // Aggregate stats from all connected instances
-        let aggregatedStats: StatsSummary | null = null;
-        const statsStates = connectedStates.filter((s) => s.stats !== null);
-        if (statsStates.length > 0) {
-          aggregatedStats = this.aggregateStats(
-            statsStates.map((s) => s.stats!),
-          );
-        }
-
-        // Determine blocking state - only enabled if ALL instances have blocking enabled
-        const allEnabled = connectedStates.every((s) => s.blockingEnabled);
-
-        return {
-          ...this.state,
-          isConnected: true,
-          connectionError: null,
-          blockingEnabled: allEnabled, // Only true if all enabled
-          blockingTimer: null, // Timer doesn't make sense in aggregate mode
-          stats: aggregatedStats,
-          totpRequired: false,
-        };
-      }
-
-      // Instances exist but none connected - return explicit disconnected state
-      // Don't fall through to legacy state which may have stale isConnected value
+    const connectedStates = Array.from(this.instanceStates.values()).filter(
+      (state) => state.isConnected,
+    );
+    if (connectedStates.length === 0) {
       return {
-        ...this.state,
-        isConnected: false,
+        ...initialState,
         connectionError: "All instances disconnected",
-        stats: null,
-        totpRequired: false,
       };
     }
 
-    // Fallback to legacy state (only when no instances configured at all)
-    return { ...this.state };
+    const statsStates = connectedStates.filter((state) => state.stats !== null);
+    return {
+      ...initialState,
+      isConnected: true,
+      blockingEnabled: connectedStates.every((state) => state.blockingEnabled),
+      stats:
+        statsStates.length > 0
+          ? this.aggregateStats(statsStates.map((state) => state.stats!))
+          : null,
+    };
+  }
+
+  // ===== Instance lifecycle transitions =====
+
+  /**
+   * Projects a successfully authenticated instance.
+   */
+  async connectionSucceeded(instanceId: string): Promise<void> {
+    await this.withLock(async () => {
+      const state =
+        this.instanceStates.get(instanceId) ??
+        this.getInitialInstanceState(instanceId);
+      this.instanceStates.set(instanceId, {
+        ...state,
+        isConnected: true,
+        connectionError: null,
+        totpRequired: false,
+      });
+      await this.publishStateChange();
+    });
   }
 
   /**
-   * Update state with partial values.
-   * Updates the active instance state if set.
+   * Projects an authentication challenge without treating it as a connection.
    */
-  setState(partial: Partial<ExtensionState>): void {
-    // Update legacy state
-    this.state = { ...this.state, ...partial };
+  async requireTotp(instanceId: string): Promise<void> {
+    await this.withLock(async () => {
+      this.instanceStates.set(instanceId, {
+        ...this.getInitialInstanceState(instanceId),
+        totpRequired: true,
+      });
+      this.instanceCaches.delete(instanceId);
+      await this.publishStateChange();
+    });
+  }
 
-    // Also update active instance state if set (suppress broadcast to prevent duplicates)
-    if (this.activeInstanceId) {
-      this.updateInstanceState(
-        this.activeInstanceId,
-        {
-          isConnected: partial.isConnected,
-          connectionError: partial.connectionError,
-          blockingEnabled: partial.blockingEnabled,
-          blockingTimer: partial.blockingTimer,
-          stats: partial.stats,
-          statsLastUpdated: partial.statsLastUpdated,
-          totpRequired: partial.totpRequired,
-        },
-        { suppressBroadcast: true },
+  /**
+   * Projects an unsuccessful connection attempt.
+   */
+  async connectionFailed(instanceId: string, error: string): Promise<void> {
+    await this.withLock(async () => {
+      this.instanceStates.set(instanceId, {
+        ...this.getInitialInstanceState(instanceId),
+        connectionError: error,
+      });
+      this.instanceCaches.delete(instanceId);
+      await this.publishStateChange();
+    });
+  }
+
+  /**
+   * Records a complete statistics response as one observable transition.
+   */
+  async recordStatsSnapshot(
+    instanceId: string,
+    stats: StatsSummary,
+  ): Promise<void> {
+    await this.withLock(async () => {
+      const state =
+        this.instanceStates.get(instanceId) ??
+        this.getInitialInstanceState(instanceId);
+      const statsLastUpdated = Date.now();
+      this.instanceStates.set(instanceId, {
+        ...state,
+        isConnected: true,
+        connectionError: null,
+        totpRequired: false,
+        stats,
+        statsLastUpdated,
+      });
+      this.instanceCaches.set(instanceId, {
+        data: stats,
+        cachedAt: statsLastUpdated,
+        ttl: DEFAULTS.CACHE_TTL,
+      });
+      await this.publishStateChange();
+    });
+  }
+
+  /**
+   * Records a complete blocking response only for an existing connected
+   * session. Lifecycle operations own connectivity, authentication, and
+   * membership; a late blocking response may update neither.
+   */
+  async recordBlockingSnapshot(
+    instanceId: string,
+    status: BlockingStatus,
+  ): Promise<boolean> {
+    return this.withLock(async () => {
+      const state = this.instanceStates.get(instanceId);
+      if (!state?.isConnected || state.totpRequired) return false;
+
+      this.instanceStates.set(instanceId, {
+        ...state,
+        blockingEnabled: status.blocking === "enabled",
+        blockingTimer: status.timer,
+      });
+      await this.publishStateChange();
+      return true;
+    });
+  }
+
+  /**
+   * Changes the projection from one instance to another, or to "All".
+   */
+  async selectInstance(instanceId: string | null): Promise<void> {
+    await this.withLock(async () => {
+      this.activeInstanceId = instanceId;
+      await this.publishStateChange();
+    });
+  }
+
+  /**
+   * Clears all session-derived values while retaining the disconnected instance.
+   */
+  async disconnectInstance(instanceId: string): Promise<void> {
+    await this.withLock(async () => {
+      this.instanceStates.set(
+        instanceId,
+        this.getInitialInstanceState(instanceId),
       );
-    }
-
-    this.notifyListeners();
-    this.broadcastStateUpdate().catch((error) => {
-      logger.debug("Failed to broadcast state update:", error);
+      this.instanceCaches.delete(instanceId);
+      await this.publishStateChange();
     });
   }
 
   /**
-   * Reset state to initial values.
+   * Removes an instance projection and atomically projects the persisted
+   * selection that remains after removal.
    */
-  reset(): void {
-    this.state = this.getInitialState();
-    this.tabDomains.clear();
-    this.notifyListeners();
-    this.broadcastStateUpdate().catch((error) => {
-      logger.debug("Failed to broadcast state update:", error);
-    });
-  }
-
-  // ===== Multi-Instance State API =====
-
-  /**
-   * Set the active instance ID.
-   */
-  setActiveInstanceId(instanceId: string | null): void {
-    this.activeInstanceId = instanceId;
-
-    // If switching to a specific instance, sync legacy state
-    if (instanceId) {
-      const instanceState = this.instanceStates.get(instanceId);
-      if (instanceState) {
-        this.state = this.instanceStateToExtensionState(instanceState);
-      }
-    }
-
-    this.notifyListeners();
-    this.broadcastStateUpdate().catch((error) => {
-      logger.debug("Failed to broadcast state update:", error);
+  async removeInstance(
+    instanceId: string,
+    activeInstanceId: string | null = null,
+  ): Promise<void> {
+    await this.withLock(async () => {
+      this.instanceStates.delete(instanceId);
+      this.instanceCaches.delete(instanceId);
+      this.activeInstanceId = activeInstanceId;
+      await this.publishStateChange();
     });
   }
 
@@ -221,138 +269,6 @@ class StateStore {
    */
   getInstanceState(instanceId: string): InstanceState | null {
     return this.instanceStates.get(instanceId) || null;
-  }
-
-  /**
-   * Update state for a specific instance.
-   * Uses lock to prevent race conditions during concurrent updates.
-   * suppressBroadcast parameter prevents duplicate broadcasts when called from setState().
-   */
-  updateInstanceState(
-    instanceId: string,
-    partial: Partial<Omit<InstanceState, "instanceId">>,
-    options?: { suppressBroadcast?: boolean },
-  ): void {
-    // Use lock to serialize state updates
-    // Note: We queue the update but don't await - callers can await updateInstanceStateAsync if needed
-    this.withLock(() => {
-      this.updateInstanceStateInternal(instanceId, partial, options);
-    }).catch((error) => {
-      logger.error("Error in updateInstanceState lock:", error);
-    });
-  }
-
-  /**
-   * Async version of updateInstanceState that can be awaited.
-   * Use this when you need to ensure the update completes before continuing.
-   */
-  async updateInstanceStateAsync(
-    instanceId: string,
-    partial: Partial<Omit<InstanceState, "instanceId">>,
-    options?: { suppressBroadcast?: boolean },
-  ): Promise<void> {
-    await this.withLock(() => {
-      this.updateInstanceStateInternal(instanceId, partial, options);
-    });
-  }
-
-  /**
-   * Internal implementation of instance state update.
-   * Must be called within withLock() to ensure thread safety.
-   */
-  private updateInstanceStateInternal(
-    instanceId: string,
-    partial: Partial<Omit<InstanceState, "instanceId">>,
-    options?: { suppressBroadcast?: boolean },
-  ): void {
-    let state = this.instanceStates.get(instanceId);
-
-    if (!state) {
-      state = this.getInitialInstanceState(instanceId);
-    }
-
-    // Apply partial updates, filtering out undefined values
-    const updates: Partial<InstanceState> = {};
-    if (partial.isConnected !== undefined)
-      updates.isConnected = partial.isConnected;
-    if (partial.connectionError !== undefined)
-      updates.connectionError = partial.connectionError;
-    if (partial.blockingEnabled !== undefined)
-      updates.blockingEnabled = partial.blockingEnabled;
-    if (partial.blockingTimer !== undefined)
-      updates.blockingTimer = partial.blockingTimer;
-    if (partial.stats !== undefined) updates.stats = partial.stats;
-    if (partial.statsLastUpdated !== undefined)
-      updates.statsLastUpdated = partial.statsLastUpdated;
-    if (partial.totpRequired !== undefined)
-      updates.totpRequired = partial.totpRequired;
-
-    this.instanceStates.set(instanceId, { ...state, ...updates });
-
-    // Update cache if stats were updated
-    if (partial.stats !== undefined && partial.stats !== null) {
-      this.instanceCaches.set(instanceId, {
-        data: partial.stats,
-        cachedAt: Date.now(),
-        ttl: DEFAULTS.CACHE_TTL,
-      });
-    }
-
-    // Skip broadcast if suppressed (to prevent duplicates from setState)
-    if (options?.suppressBroadcast) {
-      return;
-    }
-
-    // If this is the active instance, also update legacy state
-    if (instanceId === this.activeInstanceId) {
-      this.state = this.instanceStateToExtensionState(
-        this.instanceStates.get(instanceId)!,
-      );
-      this.notifyListeners();
-      this.broadcastStateUpdate().catch((error) => {
-        logger.debug("Failed to broadcast state update:", error);
-      });
-    } else if (this.activeInstanceId === null) {
-      // In "All" mode, debounce broadcasts to batch parallel instance updates
-      // This prevents rapid-fire STATE_UPDATED messages during concurrent stats refresh
-      this.debouncedBroadcast();
-    }
-  }
-
-  /**
-   * Reset state for a specific instance.
-   */
-  resetInstanceState(instanceId: string): void {
-    this.instanceStates.set(
-      instanceId,
-      this.getInitialInstanceState(instanceId),
-    );
-    this.instanceCaches.delete(instanceId);
-
-    if (instanceId === this.activeInstanceId) {
-      this.state = this.getInitialState();
-      this.notifyListeners();
-      this.broadcastStateUpdate().catch((error) => {
-        logger.debug("Failed to broadcast state update:", error);
-      });
-    }
-  }
-
-  /**
-   * Remove state for a specific instance.
-   */
-  removeInstanceState(instanceId: string): void {
-    this.instanceStates.delete(instanceId);
-    this.instanceCaches.delete(instanceId);
-
-    if (instanceId === this.activeInstanceId) {
-      this.activeInstanceId = null;
-      this.state = this.getInitialState();
-      this.notifyListeners();
-      this.broadcastStateUpdate().catch((error) => {
-        logger.debug("Failed to broadcast state update:", error);
-      });
-    }
   }
 
   /**
@@ -709,31 +625,17 @@ class StateStore {
   }
 
   /**
-   * Debounced broadcast for "All" mode to batch parallel instance updates.
-   * Prevents rapid-fire STATE_UPDATED messages during concurrent stats refresh.
+   * Publishes the new projection after a complete state transition.
    */
-  private debouncedBroadcast(): void {
-    if (this.broadcastDebounceTimer !== null) {
-      clearTimeout(this.broadcastDebounceTimer);
-    }
-
-    this.broadcastDebounceTimer = setTimeout(() => {
-      this.broadcastDebounceTimer = null;
-      this.notifyListeners();
-      this.broadcastStateUpdate().catch((error) => {
-        logger.debug("Failed to broadcast state update:", error);
-      });
-    }, this.BROADCAST_DEBOUNCE_MS);
+  private async publishStateChange(): Promise<void> {
+    this.notifyListeners();
+    await this.broadcastStateUpdate();
   }
 
   /**
-   * Clean up resources (timers, listeners).
+   * Clean up resources held by subscriptions.
    */
   destroy(): void {
-    if (this.broadcastDebounceTimer !== null) {
-      clearTimeout(this.broadcastDebounceTimer);
-      this.broadcastDebounceTimer = null;
-    }
     this.listeners.clear();
   }
 
@@ -747,13 +649,12 @@ class StateStore {
         payload: this.getState(),
       });
     } catch (error) {
-      // No listeners is normal (popup/sidebar may not be open)
-      // Only log if it's a real error, not "Could not establish connection"
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      if (!errorMessage.includes("Could not establish connection")) {
-        logger.debug("Failed to broadcast state update:", error);
-      }
+      if (errorMessage.includes("Could not establish connection")) return;
+
+      logger.debug("Failed to broadcast state update:", error);
+      throw error;
     }
   }
 

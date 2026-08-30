@@ -53,6 +53,13 @@ describe("utils", () => {
       expect(isSameSite("com", "com")).toBe(true);
       expect(isSameSite("localhost", "localhost")).toBe(true);
     });
+
+    it("keeps IP addresses and multi-part public suffixes distinct", () => {
+      expect(isSameSite("192.168.1.1", "192.168.1.1")).toBe(true);
+      expect(isSameSite("192.168.1.1", "192.168.1.2")).toBe(false);
+      expect(isSameSite("api.example.co.uk", "www.example.co.uk")).toBe(true);
+      expect(isSameSite("example.co.uk", "other.co.uk")).toBe(false);
+    });
   });
 
   describe("isQueryBlocked", () => {

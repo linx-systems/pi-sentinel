@@ -1,5 +1,5 @@
 import browser from "webextension-polyfill";
-import { authManager } from "../api/auth";
+import { instanceManager } from "../api/instance-manager";
 import { formatDuration } from "~/utils/utils";
 import { logger } from "~/utils/logger";
 
@@ -26,15 +26,8 @@ class NotificationService {
    * Initialize notification settings.
    */
   async initialize(): Promise<void> {
-    const config = await authManager.getConfig();
-    this.notificationsEnabled = config?.notificationsEnabled ?? true;
-  }
-
-  /**
-   * Enable or disable notifications.
-   */
-  setEnabled(enabled: boolean): void {
-    this.notificationsEnabled = enabled;
+    const { globalSettings } = await instanceManager.getInstances();
+    this.notificationsEnabled = globalSettings.notificationsEnabled;
   }
 
   /**

@@ -1,59 +1,9 @@
-import type {
-  AggregatedState,
-  BlockingStatus,
-  ExtensionState,
-  InstanceState,
-  PersistedInstances,
-  PiHoleInstance,
-  QueryEntry,
-  StatsSummary,
-  TabDomainData,
-  TemporaryAllowEntry,
-} from "./types";
-import { TIMEOUTS } from "./constants";
-import { ErrorHandler, ErrorType } from "./error-handler";
+import type { ExtensionState, TemporaryAllowEntry } from "./types";
+import type { ConnectInstanceFailure } from "./connection-failure";
 
 // Message Types
-export type MessageType =
-  | "AUTHENTICATE"
-  | "LOGOUT"
-  | "GET_STATE"
-  | "GET_STATS"
-  | "GET_BLOCKING_STATUS"
-  | "SET_BLOCKING"
-  | "GET_TAB_DOMAINS"
-  | "ADD_TO_ALLOWLIST"
-  | "ADD_TO_DENYLIST"
-  | "REMOVE_FROM_ALLOWLIST"
-  | "REMOVE_FROM_DENYLIST"
-  | "SEARCH_DOMAIN"
-  | "GET_QUERIES"
-  | "SAVE_CONFIG"
-  | "TEST_CONNECTION"
-  | "HEALTH_CHECK"
-  | "STATE_UPDATED"
-  | "TAB_DOMAINS_UPDATED"
-  | "INSTANCES_UPDATED"
-  // Multi-instance message types
-  | "GET_INSTANCES"
-  | "ADD_INSTANCE"
-  | "UPDATE_INSTANCE"
-  | "DELETE_INSTANCE"
-  | "SET_ACTIVE_INSTANCE"
-  | "CONNECT_INSTANCE"
-  | "DISCONNECT_INSTANCE"
-  | "GET_INSTANCE_STATE"
-  | "CHECK_PASSWORD_AVAILABLE"
-  | "CREATE_TEMPORARY_ALLOWS"
-  | "GET_TEMPORARY_ALLOWS"
-  | "REMOVE_TEMPORARY_ALLOWS"
-  | "TEMPORARY_ALLOWS_UPDATED";
 
 // Message Payloads
-export interface AuthenticatePayload {
-  password: string;
-  totp?: string;
-}
 
 export interface SetBlockingPayload {
   enabled: boolean;
@@ -68,14 +18,6 @@ export interface DomainPayload {
 export interface GetQueriesPayload {
   length?: number;
   from?: number;
-}
-
-export interface SaveConfigPayload {
-  piholeUrl: string;
-  password: string;
-  notificationsEnabled?: boolean;
-  refreshInterval?: number;
-  rememberPassword?: boolean;
 }
 
 export interface TestConnectionPayload {
@@ -159,17 +101,17 @@ export interface RemoveTemporaryAllowsResult {
   failures: TemporaryAllowRemovalFailure[];
 }
 
-// Response Types
-export interface MessageResponse<T = unknown> {
+export interface MessageResponse<
+  T = unknown,
+  Failure = string | ConnectInstanceFailure,
+> {
   success: boolean;
   data?: T;
-  error?: string;
+  error?: Failure;
 }
 
 // Message Definitions
-export type Message =
-  | { type: "AUTHENTICATE"; payload: AuthenticatePayload }
-  | { type: "LOGOUT" }
+export type CommandMessage =
   | { type: "GET_STATE" }
   | { type: "GET_STATS" }
   | { type: "GET_BLOCKING_STATUS" }
@@ -181,13 +123,8 @@ export type Message =
   | { type: "REMOVE_FROM_DENYLIST"; payload: DomainPayload }
   | { type: "SEARCH_DOMAIN"; payload: { domain: string } }
   | { type: "GET_QUERIES"; payload?: GetQueriesPayload }
-  | { type: "SAVE_CONFIG"; payload: SaveConfigPayload }
   | { type: "TEST_CONNECTION"; payload: TestConnectionPayload }
   | { type: "HEALTH_CHECK" }
-  | { type: "STATE_UPDATED"; payload: Partial<ExtensionState> }
-  | { type: "TAB_DOMAINS_UPDATED"; payload: SerializableTabDomains }
-  | { type: "INSTANCES_UPDATED" }
-  // Multi-instance messages
   | { type: "GET_INSTANCES" }
   | { type: "ADD_INSTANCE"; payload: AddInstancePayload }
   | { type: "UPDATE_INSTANCE"; payload: UpdateInstancePayload }
@@ -196,7 +133,6 @@ export type Message =
   | { type: "CONNECT_INSTANCE"; payload: ConnectInstancePayload }
   | { type: "DISCONNECT_INSTANCE"; payload: DisconnectInstancePayload }
   | { type: "GET_INSTANCE_STATE"; payload: GetInstanceStatePayload }
-  | { type: "GET_AGGREGATED_STATE" }
   | {
       type: "CHECK_PASSWORD_AVAILABLE";
       payload: CheckPasswordAvailablePayload;
@@ -209,8 +145,16 @@ export type Message =
   | {
       type: "REMOVE_TEMPORARY_ALLOWS";
       payload: RemoveTemporaryAllowsPayload;
-    }
+    };
+
+export type BroadcastMessage =
+  | { type: "STATE_UPDATED"; payload: Partial<ExtensionState> }
+  | { type: "TAB_DOMAINS_UPDATED"; payload: SerializableTabDomains }
+  | { type: "INSTANCES_UPDATED" }
   | { type: "TEMPORARY_ALLOWS_UPDATED"; payload: TemporaryAllowEntry[] };
+
+export type Message = CommandMessage | BroadcastMessage;
+export type MessageType = Message["type"];
 
 // Serializable version of TabDomainData for messaging
 export interface SerializableTabDomains {
@@ -220,88 +164,3 @@ export interface SerializableTabDomains {
   domains: string[];
   thirdPartyDomains: string[];
 }
-
-/**
- * Type-safe message sender with timeout handling
- * @param message - The message to send
- * @param timeoutMs - Timeout in milliseconds (default: 10000ms)
- * @returns Promise resolving to message response or error
- */
-export async function sendMessage<T>(
-  message: Message,
-  timeoutMs = TIMEOUTS.MESSAGE,
-): Promise<MessageResponse<T>> {
-  const browser = (await import("webextension-polyfill")).default;
-
-  try {
-    // Race between message send and timeout
-    const response = await Promise.race<MessageResponse<T>>([
-      browser.runtime.sendMessage(message) as Promise<MessageResponse<T>>,
-      new Promise<MessageResponse<T>>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `Message timeout: ${message.type} exceeded ${timeoutMs}ms`,
-              ),
-            ),
-          timeoutMs,
-        ),
-      ),
-    ]);
-
-    return response;
-  } catch (error) {
-    // Handle timeout or message sending errors
-    const appError = ErrorHandler.handle(
-      error,
-      `sendMessage(${message.type})`,
-      ErrorType.INTERNAL,
-    );
-
-    return {
-      success: false,
-      error: appError.message,
-    };
-  }
-}
-
-// Response Types for each message
-export type AuthenticateResponse = MessageResponse<{ totpRequired?: boolean }>;
-export type GetStateResponse = MessageResponse<ExtensionState>;
-export type GetStatsResponse = MessageResponse<StatsSummary>;
-export type GetBlockingStatusResponse = MessageResponse<BlockingStatus>;
-export type SetBlockingResponse = MessageResponse<BlockingStatus>;
-export type GetTabDomainsResponse = MessageResponse<TabDomainData>;
-export type GetQueriesResponse = MessageResponse<QueryEntry[]>;
-export type DomainActionResponse = MessageResponse<void>;
-export type SearchDomainResponse = MessageResponse<{
-  gravity: boolean;
-  allowlist: boolean;
-  denylist: boolean;
-  instances?: Array<{
-    instanceId: string;
-    instanceName?: string;
-    gravity: boolean;
-    allowlist: boolean;
-    denylist: boolean;
-  }>;
-}>;
-
-// Multi-instance Response Types
-export type GetInstancesResponse = MessageResponse<PersistedInstances>;
-export type AddInstanceResponse = MessageResponse<PiHoleInstance>;
-export type UpdateInstanceResponse = MessageResponse<PiHoleInstance>;
-export type DeleteInstanceResponse = MessageResponse<void>;
-export type SetActiveInstanceResponse = MessageResponse<void>;
-export type ConnectInstanceResponse = MessageResponse<{
-  totpRequired?: boolean;
-}>;
-export type DisconnectInstanceResponse = MessageResponse<void>;
-export type GetInstanceStateResponse = MessageResponse<InstanceState>;
-export type GetAggregatedStateResponse = MessageResponse<AggregatedState>;
-export type CreateTemporaryAllowsResponse =
-  MessageResponse<CreateTemporaryAllowsResult>;
-export type GetTemporaryAllowsResponse = MessageResponse<TemporaryAllowEntry[]>;
-export type RemoveTemporaryAllowsResponse =
-  MessageResponse<RemoveTemporaryAllowsResult>;

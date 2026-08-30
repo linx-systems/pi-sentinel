@@ -93,18 +93,6 @@ export const ERROR_MESSAGES = {
   CRYPTO_ERROR: "Encryption error. Please try logging in again.",
 } as const;
 
-// Validation Rules
-export const VALIDATION_RULES = {
-  DOMAIN_REGEX:
-    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/i,
-  TOTP_REGEX: /^\d{6}$/,
-  MAX_TIMER_SECONDS: 86400, // 24 hours
-  MIN_TIMER_SECONDS: 0,
-  MAX_DOMAIN_LENGTH: 253,
-  MAX_LABEL_LENGTH: 63,
-  MIN_PASSWORD_LENGTH: 1,
-} as const;
-
 // Retry Configuration
 export const RETRY_CONFIG = {
   MAX_RETRIES: 3,

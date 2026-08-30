@@ -4,24 +4,34 @@ import { InstanceCard } from "./InstanceCard";
 import { InstanceModal } from "./InstanceModal";
 import { PasswordPromptModal } from "./PasswordPromptModal";
 import { TotpInput } from "./TotpInput";
-import type {
-  InstanceState,
-  PersistedInstances,
-  PiHoleInstance,
-} from "~/utils/types";
-import { sendMessage } from "~/utils/messaging";
-import { sendViaStorage } from "~/utils/storage-message";
+import type { ConnectInstanceFailure } from "~/utils/connection-failure";
+import type { InstanceState, PiHoleInstance } from "~/utils/types";
+import type { ExtensionCommands } from "~/utils/extension-commands";
 import { logger } from "~/utils/logger";
-import { TIMEOUTS } from "~/utils/constants";
+
+type InstanceListCommands = Pick<
+  ExtensionCommands,
+  | "getInstances"
+  | "getInstanceState"
+  | "deleteInstance"
+  | "checkPasswordAvailable"
+  | "connectInstance"
+  | "disconnectInstance"
+  | "setActiveInstance"
+  | "testConnection"
+  | "addInstance"
+  | "updateInstance"
+>;
 
 interface InstanceListProps {
+  commands: InstanceListCommands;
   onMessage: (message: {
     type: "success" | "error" | "info";
     text: string;
   }) => void;
 }
 
-export function InstanceList({ onMessage }: InstanceListProps) {
+export function InstanceList({ commands, onMessage }: InstanceListProps) {
   const [instances, setInstances] = useState<PiHoleInstance[]>([]);
   const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
   const [instanceStates, setInstanceStates] = useState<
@@ -32,7 +42,7 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   const [editingInstance, setEditingInstance] = useState<PiHoleInstance | null>(
     null,
   );
-  const [connectingInstanceId, setConnectingInstanceId] = useState<
+  const [activeFlowInstanceId, setActiveFlowInstanceId] = useState<
     string | null
   >(null);
   const [totpRequired, setTotpRequired] = useState(false);
@@ -43,19 +53,34 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     null,
   );
   const [passwordPromptLoading, setPasswordPromptLoading] = useState(false);
+  const [totpError, setTotpError] = useState<string | null>(null);
+  const [connectionFailures, setConnectionFailures] = useState<
+    Map<string, ConnectInstanceFailure>
+  >(new Map());
+
   const [useStoredPasswordForTotp, setUseStoredPasswordForTotp] =
     useState(false);
 
   const loadDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const activeFlowInstanceIdRef = useRef<string | null>(null);
+  const requestInFlightRef = useRef(false);
+  const [requestInFlight, setRequestInFlight] = useState(false);
+
   // Load instances on mount
   useEffect(() => {
     loadInstances();
 
     const handleMessage = (message: unknown) => {
-      const msg = message as { type: string };
-      if (msg.type === "INSTANCES_UPDATED") {
+      const type =
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        typeof message.type === "string"
+          ? message.type
+          : undefined;
+      if (type === "INSTANCES_UPDATED") {
         // Leading-edge debounce: fire immediately on first event,
         // then ignore subsequent events within the 100ms window
         if (!loadDebounceRef.current) {
@@ -71,7 +96,7 @@ export function InstanceList({ onMessage }: InstanceListProps) {
       // Listen for STATE_UPDATED to pick up connection state changes.
       // Only refreshes states (not full loadInstances) to avoid clearing modal fields.
       // Debounced at 3s to avoid message storms from stats polls.
-      if (msg.type === "STATE_UPDATED") {
+      if (type === "STATE_UPDATED") {
         if (stateDebounceRef.current) clearTimeout(stateDebounceRef.current);
         stateDebounceRef.current = setTimeout(() => {
           refreshInstanceStates();
@@ -95,15 +120,9 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   const loadInstances = async () => {
     setIsLoading(true);
     try {
-      // Use storage-based messaging to avoid Firefox bug where runtime.sendMessage
-      // returns undefined for async responses from options pages
-      const response = await sendViaStorage<PersistedInstances>(
-        "pendingGetInstances",
-        "getInstancesResponse",
-        {},
-      );
+      const response = await commands.getInstances();
 
-      if (response?.success && response.data) {
+      if (response.success) {
         const newInstances = response.data.instances;
         setInstances(newInstances);
         setActiveInstanceId(response.data.activeInstanceId);
@@ -121,30 +140,39 @@ export function InstanceList({ onMessage }: InstanceListProps) {
   const refreshInstanceStates = async (
     instanceList: PiHoleInstance[] = instances,
   ) => {
-    const newStates = new Map<string, InstanceState>();
-    // Sequential: all calls use the same storage key, parallel causes request loss
-    for (const instance of instanceList) {
-      try {
-        const response = await sendViaStorage<InstanceState>(
-          "pendingGetInstanceState",
-          "getInstanceStateResponse",
-          { instanceId: instance.id },
-        );
-        if (response?.success && response.data) {
-          newStates.set(instance.id, response.data);
+    const states = await Promise.all(
+      instanceList.map(async (instance) => {
+        try {
+          const response = await commands.getInstanceState(instance.id);
+          return response.success
+            ? { instanceId: instance.id, state: response.data }
+            : null;
+        } catch (err) {
+          logger.error(`Failed to get state for instance ${instance.id}:`, err);
+          return null;
         }
-      } catch (err) {
-        logger.error(`Failed to get state for instance ${instance.id}:`, err);
-      }
-    }
-    // Merge: preserve existing state for instances that failed to respond
+      }),
+    );
+
+    const connectedIds = new Set(
+      states.flatMap((result) =>
+        result?.state.isConnected ? [result.instanceId] : [],
+      ),
+    );
     setInstanceStates((prev) => {
       const merged = new Map(prev);
-      for (const [id, state] of newStates) {
-        merged.set(id, state);
+      for (const state of states) {
+        if (state) merged.set(state.instanceId, state.state);
       }
       return merged;
     });
+    if (connectedIds.size > 0) {
+      setConnectionFailures((current) => {
+        const next = new Map(current);
+        for (const instanceId of connectedIds) next.delete(instanceId);
+        return next;
+      });
+    }
   };
 
   const handleAddInstance = () => {
@@ -166,18 +194,13 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     }
 
     try {
-      logger.debug(`[InstanceList] Sending DELETE_INSTANCE for: ${instanceId}`);
-      const response = await sendMessage<void>({
-        type: "DELETE_INSTANCE",
-        payload: { instanceId },
-      });
-      logger.debug(`[InstanceList] DELETE_INSTANCE response:`, response);
+      logger.debug(`[InstanceList] Deleting instance: ${instanceId}`);
+      const response = await commands.deleteInstance(instanceId);
 
-      if (response?.success) {
+      if (response.success) {
         onMessage({ type: "success", text: "Pi-hole deleted successfully" });
       } else {
-        logger.warn(`[InstanceList] Delete failed, response:`, response);
-        throw new Error(response?.error || "Failed to delete");
+        throw new Error(response.error);
       }
     } catch (err) {
       logger.error("Failed to delete instance:", err);
@@ -188,56 +211,81 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     }
   };
 
+  const beginRequest = (instanceId: string) => {
+    if (
+      activeFlowInstanceIdRef.current !== instanceId ||
+      requestInFlightRef.current
+    ) {
+      return false;
+    }
+    requestInFlightRef.current = true;
+    setRequestInFlight(true);
+    return true;
+  };
+
+  const endRequest = () => {
+    requestInFlightRef.current = false;
+    setRequestInFlight(false);
+  };
+
+  const finishConnection = (instanceId: string) => {
+    if (activeFlowInstanceIdRef.current !== instanceId) return;
+    activeFlowInstanceIdRef.current = null;
+    setActiveFlowInstanceId(null);
+    setTotpRequired(false);
+    setTotpError(null);
+    setPendingPassword("");
+    setUseStoredPasswordForTotp(false);
+  };
+
   const handleConnectInstance = async (instanceId: string) => {
+    if (activeFlowInstanceIdRef.current) return;
+
     const instance = instances.find((item) => item.id === instanceId);
     if (!instance) {
       onMessage({ type: "error", text: "Pi-hole not found" });
       return;
     }
 
-    // Reset state
-    setConnectingInstanceId(instanceId);
+    activeFlowInstanceIdRef.current = instanceId;
+    setActiveFlowInstanceId(instanceId);
+    setConnectionFailures((current) => {
+      const next = new Map(current);
+      next.delete(instanceId);
+      return next;
+    });
     setTotpRequired(false);
+    setTotpError(null);
     setPendingPassword("");
     setUseStoredPasswordForTotp(false);
     setPasswordPromptError(null);
 
-    // Passwordless instances: connect with empty password
     if (instance.passwordless) {
       await connectInstance({ instanceId, password: "" });
       return;
     }
 
-    // Check if password is available in session/storage
-    // Uses storage-based messaging due to Firefox bug where runtime.sendMessage
-    // returns undefined for async responses from options pages
-    const checkResponse = await sendViaStorage<{ available: boolean }>(
-      "pendingCheckPasswordAvailable",
-      "checkPasswordAvailableResponse",
-      { instanceId },
-    );
+    if (!beginRequest(instanceId)) return;
+    try {
+      const checkResponse = await commands.checkPasswordAvailable(instanceId);
+      if (checkResponse.success && checkResponse.data.available) {
+        setUseStoredPasswordForTotp(true);
+        endRequest();
+        await connectInstance({ instanceId });
+        return;
+      }
 
-    logger.info(
-      `[InstanceList] CHECK_PASSWORD_AVAILABLE response:`,
-      JSON.stringify(checkResponse),
-    );
-
-    if (checkResponse?.success && checkResponse.data?.available) {
-      // Password available - connect without prompting
-      logger.info(
-        `[InstanceList] Password available, connecting without prompt`,
-      );
-      setUseStoredPasswordForTotp(true);
-      await connectInstance({ instanceId });
-      return;
+      setPasswordPromptInstance(instance);
+      endRequest();
+    } catch (error) {
+      logger.error("Failed to prepare connection:", error);
+      onMessage({
+        type: "error",
+        text: "Couldn't start the connection. Check the Pi-hole and try again.",
+      });
+      endRequest();
+      finishConnection(instanceId);
     }
-
-    // No password available - show prompt
-    logger.info(
-      `[InstanceList] Password NOT available, showing prompt. ` +
-        `success=${checkResponse?.success}, available=${checkResponse?.data?.available}`,
-    );
-    setPasswordPromptInstance(instance);
   };
 
   const connectInstance = async ({
@@ -251,34 +299,46 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     totp?: string;
     fromPrompt?: boolean;
   }): Promise<void> => {
-    let needsTotp = false;
-    if (fromPrompt) {
+    if (!beginRequest(instanceId)) return;
+
+    const source = fromPrompt ? "prompt" : totp ? "totp" : "direct";
+    let keepFlow = false;
+    if (source === "prompt") {
       setPasswordPromptLoading(true);
     }
 
     try {
-      const payload: { instanceId: string; password?: string; totp?: string } =
-        {
-          instanceId,
-        };
-      if (password !== undefined) {
-        payload.password = password;
-      }
-      if (totp) {
-        payload.totp = totp;
+      const response = await commands.connectInstance({
+        instanceId,
+        ...(password !== undefined ? { password } : {}),
+        ...(totp ? { totp } : {}),
+      });
+
+      if (!response.success) {
+        const failure = response.error;
+        setConnectionFailures((current) => {
+          const next = new Map(current);
+          next.set(instanceId, failure);
+          return next;
+        });
+        if (source === "prompt") {
+          if (failure.kind === "authentication") {
+            keepFlow = true;
+            setPasswordPromptError(failure.message);
+          } else {
+            setPasswordPromptInstance(null);
+            setPasswordPromptError(null);
+          }
+        } else if (source === "totp") {
+          keepFlow = true;
+          setTotpError(failure.message);
+        } else {
+          onMessage({ type: "error", text: failure.message });
+        }
+        return;
       }
 
-      // Use storage-based messaging due to Firefox bug where runtime.sendMessage
-      // returns undefined for async responses from options pages
-      const response = await sendViaStorage<{ totpRequired?: boolean }>(
-        "pendingConnectInstance",
-        "connectInstanceResponse",
-        payload,
-        TIMEOUTS.CONNECTION_ATTEMPT,
-      );
-
-      if (response?.success) {
-        // Optimistic UI: immediately show connected state (same pattern as disconnect)
+      if (response.data.kind === "connected") {
         setInstanceStates((prev) => {
           const next = new Map(prev);
           const current = next.get(instanceId);
@@ -291,41 +351,44 @@ export function InstanceList({ onMessage }: InstanceListProps) {
           }
           return next;
         });
+        setConnectionFailures((current) => {
+          const next = new Map(current);
+          next.delete(instanceId);
+          return next;
+        });
         onMessage({ type: "success", text: "Connected to Pi-hole" });
-        setTotpRequired(false);
-        setPendingPassword("");
         setPasswordPromptInstance(null);
         setPasswordPromptError(null);
-      } else if (response?.data?.totpRequired) {
-        needsTotp = true;
+      } else {
+        keepFlow = true;
         setTotpRequired(true);
+        setTotpError(null);
         setPendingPassword(password ?? "");
         setUseStoredPasswordForTotp(password === undefined);
         setPasswordPromptInstance(null);
         setPasswordPromptError(null);
-      } else {
-        throw new Error(response?.error || "Connection failed");
       }
-    } catch (err) {
-      logger.error("Failed to connect instance:", err);
-      let message = err instanceof Error ? err.message : "Failed to connect";
+    } catch (error) {
+      logger.error("Failed to connect instance:", error);
+      const message =
+        "Couldn't connect to the Pi-hole. Check the URL and try again.";
 
-      // Improve timeout error message
-      if (message.includes("timeout") || message.includes("Timeout")) {
-        message = "Connection timed out. Check if your Pi-hole is reachable.";
-      }
-
-      if (fromPrompt) {
+      if (source === "prompt") {
+        keepFlow = true;
         setPasswordPromptError(message);
+      } else if (source === "totp") {
+        keepFlow = true;
+        setTotpError(message);
       } else {
         onMessage({ type: "error", text: message });
       }
     } finally {
-      if (fromPrompt) {
+      if (source === "prompt") {
         setPasswordPromptLoading(false);
       }
-      if (!needsTotp) {
-        setConnectingInstanceId(null);
+      endRequest();
+      if (!keepFlow) {
+        finishConnection(instanceId);
       }
     }
   };
@@ -334,43 +397,37 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     totp: string,
     passwordFromInput?: string,
   ): Promise<void> => {
-    if (!connectingInstanceId) return;
+    const instanceId = activeFlowInstanceIdRef.current;
+    if (!instanceId || !totpRequired) return;
 
     const password = useStoredPasswordForTotp
       ? undefined
       : (passwordFromInput ?? pendingPassword);
 
-    await connectInstance({
-      instanceId: connectingInstanceId,
-      password,
-      totp,
-    });
+    await connectInstance({ instanceId, password, totp });
   };
 
   const handleTotpCancel = () => {
-    setTotpRequired(false);
-    setConnectingInstanceId(null);
-    setPendingPassword("");
-    setUseStoredPasswordForTotp(false);
+    if (requestInFlightRef.current) return;
+    const instanceId = activeFlowInstanceIdRef.current;
+    if (!instanceId) return;
+    finishConnection(instanceId);
   };
 
   const handlePasswordPromptClose = () => {
+    if (requestInFlightRef.current) return;
+    const instanceId = activeFlowInstanceIdRef.current;
+    if (!instanceId) return;
     setPasswordPromptInstance(null);
     setPasswordPromptError(null);
-    setPasswordPromptLoading(false);
-    setConnectingInstanceId(null);
+    finishConnection(instanceId);
   };
 
   const handleDisconnectInstance = async (instanceId: string) => {
     try {
-      // Use storage-based messaging due to Firefox bug
-      const response = await sendViaStorage<void>(
-        "pendingDisconnectInstance",
-        "disconnectInstanceResponse",
-        { instanceId },
-      );
+      const response = await commands.disconnectInstance(instanceId);
 
-      if (response?.success) {
+      if (response.success) {
         onMessage({ type: "info", text: "Disconnected from Pi-hole" });
         // Optimistic UI: immediately show disconnected state
         setInstanceStates((prev) => {
@@ -382,7 +439,7 @@ export function InstanceList({ onMessage }: InstanceListProps) {
           return next;
         });
       } else {
-        throw new Error(response?.error || "Failed to disconnect");
+        throw new Error(response.error);
       }
     } catch (err) {
       logger.error("Failed to disconnect instance:", err);
@@ -395,18 +452,13 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
   const handleSetActiveInstance = async (instanceId: string) => {
     try {
-      // Use storage-based messaging due to Firefox bug
-      const response = await sendViaStorage<void>(
-        "pendingSetActiveInstance",
-        "setActiveInstanceResponse",
-        { instanceId },
-      );
+      const response = await commands.setActiveInstance(instanceId);
 
-      if (response?.success) {
+      if (response.success) {
         setActiveInstanceId(instanceId);
         onMessage({ type: "success", text: "Active Pi-hole updated" });
       } else {
-        throw new Error(response?.error || "Failed to set active");
+        throw new Error(response.error);
       }
     } catch (err) {
       logger.error("Failed to set active instance:", err);
@@ -434,12 +486,13 @@ export function InstanceList({ onMessage }: InstanceListProps) {
     );
   }
 
-  if (totpRequired && connectingInstanceId) {
+  if (totpRequired && activeFlowInstanceId) {
     return (
       <TotpInput
         onSubmit={handleTotpSubmit}
         onCancel={handleTotpCancel}
-        isLoading={false}
+        isLoading={requestInFlight}
+        error={totpError}
         showPassword={false}
       />
     );
@@ -476,7 +529,10 @@ export function InstanceList({ onMessage }: InstanceListProps) {
               key={instance.id}
               instance={instance}
               state={instanceStates.get(instance.id) || null}
+              connectionFailure={connectionFailures.get(instance.id) || null}
               isActive={instance.id === activeInstanceId}
+              isConnecting={activeFlowInstanceId === instance.id}
+              isConnectionFlowActive={activeFlowInstanceId !== null}
               onEdit={handleEditInstance}
               onDelete={handleDeleteInstance}
               onConnect={handleConnectInstance}
@@ -489,6 +545,7 @@ export function InstanceList({ onMessage }: InstanceListProps) {
 
       {showModal && (
         <InstanceModal
+          commands={commands}
           instance={editingInstance}
           onClose={() => {
             setShowModal(false);

@@ -10,18 +10,15 @@ import { Repair } from "./Repair";
 import { ToastProvider, useToast } from "./ToastContext";
 import { InstanceSelector } from "~/components/InstanceSelector";
 import { logger } from "~/utils/logger";
-import type { TemporaryAllowEntry } from "~/utils/types";
-import type {
-  CreateTemporaryAllowsResult,
-  MessageResponse,
-  RemoveTemporaryAllowsResult,
-  SerializableTabDomains,
-} from "~/utils/messaging";
+import type { SerializableTabDomains } from "~/utils/messaging";
+import { createRuntimeExtensionCommands } from "~/utils/extension-commands";
 import { useExtensionState } from "~/utils/hooks/useExtensionState";
+import { useTemporaryAllows } from "./temporary-allows";
 
 type Tab = "domains" | "queries" | "repair";
 type TabDomains = SerializableTabDomains;
 
+const commands = createRuntimeExtensionCommands();
 export function App() {
   return (
     <ToastProvider>
@@ -33,11 +30,9 @@ export function App() {
 function AppContent() {
   const [activeTab, setActiveTab] = useState<Tab>("domains");
   const [tabDomains, setTabDomains] = useState<TabDomains | null>(null);
-  const [temporaryAllows, setTemporaryAllows] = useState<TemporaryAllowEntry[]>(
-    [],
-  );
   const initialLoadComplete = useRef(false);
   const { showToast } = useToast();
+  const temporaryAllows = useTemporaryAllows(commands);
 
   // Use shared extension state hook
   const { state, isLoading: stateLoading } = useExtensionState();
@@ -52,10 +47,7 @@ function AppContent() {
         currentWindow: true,
       });
       if (currentTab?.id) {
-        const domainsResponse = (await browser.runtime.sendMessage({
-          type: "GET_TAB_DOMAINS",
-          payload: { tabId: currentTab.id },
-        })) as MessageResponse<TabDomains> | undefined;
+        const domainsResponse = await commands.getTabDomains(currentTab.id);
 
         if (domainsResponse?.success && domainsResponse.data) {
           setTabDomains(domainsResponse.data);
@@ -68,22 +60,8 @@ function AppContent() {
     }
   }, []);
 
-  const loadTemporaryAllows = useCallback(async () => {
-    try {
-      const response = (await browser.runtime.sendMessage({
-        type: "GET_TEMPORARY_ALLOWS",
-      })) as MessageResponse<TemporaryAllowEntry[]> | undefined;
-      if (response?.success && Array.isArray(response.data)) {
-        setTemporaryAllows(response.data);
-      }
-    } catch (err) {
-      logger.error("Failed to load temporary allows:", err);
-    }
-  }, []);
-
   useEffect(() => {
     loadTabDomains();
-    loadTemporaryAllows();
 
     // Listen for tab changes
     const handleTabActivated = () => loadTabDomains();
@@ -93,10 +71,10 @@ function AppContent() {
     const handleMessage = async (message: unknown) => {
       const msg = message as {
         type: string;
-        payload?: TabDomains | TemporaryAllowEntry[];
+        payload?: TabDomains;
       };
       if (msg.type === "TAB_DOMAINS_UPDATED") {
-        if (msg.payload && !Array.isArray(msg.payload)) {
+        if (msg.payload) {
           const [currentTab] = await browser.tabs.query({
             active: true,
             currentWindow: true,
@@ -107,12 +85,6 @@ function AppContent() {
         } else {
           loadTabDomains();
         }
-      } else if (msg.type === "TEMPORARY_ALLOWS_UPDATED") {
-        if (Array.isArray(msg.payload)) {
-          setTemporaryAllows(msg.payload);
-        } else {
-          loadTemporaryAllows();
-        }
       }
     };
     browser.runtime.onMessage.addListener(handleMessage);
@@ -121,31 +93,33 @@ function AppContent() {
       browser.tabs.onActivated.removeListener(handleTabActivated);
       browser.runtime.onMessage.removeListener(handleMessage);
     };
-  }, [loadTabDomains, loadTemporaryAllows]);
+  }, [loadTabDomains]);
 
   const handleAddToList = async (
     domain: string,
     listType: "allow" | "deny",
   ) => {
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: listType === "allow" ? "ADD_TO_ALLOWLIST" : "ADD_TO_DENYLIST",
-        payload: { domain },
-      })) as MessageResponse<void> | undefined;
+      const response =
+        listType === "allow"
+          ? await commands.addToAllowlist(domain)
+          : await commands.addToDenylist(domain);
 
       if (response?.success) {
         showToast({
           type: "success",
           message: `Added ${domain} to ${listType}list`,
         });
-      } else {
-        showToast({
-          type: "error",
-          message: response?.error || "Failed to add domain",
-        });
+        return true;
       }
+      showToast({
+        type: "error",
+        message: response?.error || "Failed to add domain",
+      });
+      return false;
     } catch {
       showToast({ type: "error", message: "Failed to add domain" });
+      return false;
     }
   };
 
@@ -154,20 +128,19 @@ function AppContent() {
     durationSeconds: number | null,
   ) => {
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: "CREATE_TEMPORARY_ALLOWS",
-        payload: { domains: [domain], durationSeconds },
-      })) as MessageResponse<CreateTemporaryAllowsResult> | undefined;
-      const result = response?.data;
-      if (!response?.success || !result) {
+      const response = await temporaryAllows.allow({
+        domains: [domain],
+        durationSeconds,
+      });
+      if (!response.success) {
         showToast({
           type: "error",
-          message: response?.error || "Failed to create temporary allow",
+          message: response.error || "Failed to create temporary allow",
         });
-        return;
+        return false;
       }
 
-      await loadTemporaryAllows();
+      const result = response.data;
       if (result.failures.length > 0) {
         showToast({
           type: "error",
@@ -184,35 +157,35 @@ function AppContent() {
           message: `Temporarily allowed ${domain}.`,
         });
       }
+      return result.entries.length > 0;
     } catch {
       showToast({ type: "error", message: "Failed to create temporary allow" });
+      return false;
     }
   };
 
   const handleRemoveTemporaryAllows = async (entryIds: string[]) => {
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: "REMOVE_TEMPORARY_ALLOWS",
-        payload: { entryIds },
-      })) as MessageResponse<RemoveTemporaryAllowsResult> | undefined;
-      const result = response?.data;
-      if (!response?.success || !result) {
+      const response = await temporaryAllows.revoke(entryIds);
+      if (!response.success) {
         showToast({
           type: "error",
-          message: response?.error || "Failed to cancel temporary allow",
+          message: response.error || "Failed to cancel temporary allow",
         });
-        return;
+        return false;
       }
 
-      await loadTemporaryAllows();
+      const result = response.data;
       showToast({
         type: result.failures.length ? "error" : "success",
         message: result.failures.length
           ? `Cancelled ${result.removedIds.length} entries; ${result.failures.length} could not be removed.`
           : `Cancelled ${result.removedIds.length} temporary ${result.removedIds.length === 1 ? "allow" : "allows"}.`,
       });
+      return result.removedIds.length > 0;
     } catch {
       showToast({ type: "error", message: "Failed to cancel temporary allow" });
+      return false;
     }
   };
 
@@ -284,17 +257,16 @@ function AppContent() {
         {activeTab === "domains" ? (
           <DomainList
             domains={tabDomains?.domains || []}
-            thirdPartyDomains={tabDomains?.thirdPartyDomains || []}
             firstPartyDomain={tabDomains?.firstPartyDomain || ""}
             onAddToList={handleAddToList}
-            temporaryAllows={temporaryAllows}
+            temporaryAllows={temporaryAllows.entries}
             onCreateTemporaryAllow={handleCreateTemporaryAllow}
             onRemoveTemporaryAllows={handleRemoveTemporaryAllows}
           />
         ) : activeTab === "queries" ? (
           <QueryLog onAddToList={handleAddToList} />
         ) : (
-          <Repair onTemporaryAllowsChanged={loadTemporaryAllows} />
+          <Repair temporaryAllows={temporaryAllows} />
         )}
       </div>
     </div>

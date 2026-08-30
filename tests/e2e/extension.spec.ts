@@ -186,7 +186,7 @@ test.describe("Pi-hole API Integration", () => {
       );
     });
 
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     // Test authentication error handling
     const authResponse = await page.evaluate(async () => {
@@ -217,7 +217,7 @@ test.describe("Pi-hole API Integration", () => {
       );
     });
 
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     // Test TOTP response
     const authResponse = await page.evaluate(async () => {
@@ -244,7 +244,7 @@ test.describe("Pi-hole API Integration", () => {
       );
     });
 
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     // Test error handling
     const statsResponse = await page.evaluate(async () => {

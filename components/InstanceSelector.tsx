@@ -1,11 +1,7 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import browser from "webextension-polyfill";
-import type {
-  PiHoleInstance,
-  InstanceState,
-  PersistedInstances,
-} from "~/utils/types";
-import type { MessageResponse } from "~/utils/messaging";
+import type { PiHoleInstance, InstanceState } from "~/utils/types";
+import { createRuntimeExtensionCommands } from "~/utils/extension-commands";
 import { logger } from "~/utils/logger";
 
 interface InstanceSelectorProps {
@@ -19,6 +15,8 @@ interface InstanceWithState {
   instance: PiHoleInstance;
   state: InstanceState | null;
 }
+
+const commands = createRuntimeExtensionCommands();
 
 export function InstanceSelector({
   onInstanceChange,
@@ -90,9 +88,7 @@ export function InstanceSelector({
 
   const loadInstances = async () => {
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: "GET_INSTANCES",
-      })) as MessageResponse<PersistedInstances>;
+      const response = await commands.getInstances();
 
       if (response?.success && response.data) {
         setActiveInstanceId(response.data.activeInstanceId);
@@ -101,10 +97,9 @@ export function InstanceSelector({
         const instancesWithState: InstanceWithState[] = await Promise.all(
           response.data.instances.map(async (instance) => {
             try {
-              const stateResponse = (await browser.runtime.sendMessage({
-                type: "GET_INSTANCE_STATE",
-                payload: { instanceId: instance.id },
-              })) as MessageResponse<InstanceState>;
+              const stateResponse = await commands.getInstanceState(
+                instance.id,
+              );
 
               return {
                 instance,
@@ -150,10 +145,7 @@ export function InstanceSelector({
     setIsOpen(false);
 
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: "SET_ACTIVE_INSTANCE",
-        payload: { instanceId },
-      })) as MessageResponse<void>;
+      const response = await commands.setActiveInstance(instanceId);
 
       if (response?.success) {
         setActiveInstanceId(instanceId);

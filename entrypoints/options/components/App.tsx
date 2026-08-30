@@ -2,15 +2,28 @@
  * Options page main component - manages Pi-hole instance configuration.
  * @module options/App
  */
-import { useState } from "preact/hooks";
+import { useMemo, useState } from "preact/hooks";
 import { InstanceList } from "./InstanceList";
+import { createStorageExtensionCommands } from "~/utils/extension-commands";
+import { logger } from "~/utils/logger";
 import { CheckIcon, ErrorIcon, InfoIcon } from "~/utils/icons";
+import { TIMEOUTS } from "~/utils/constants";
 
 export function App() {
   const [message, setMessage] = useState<{
     type: "success" | "error" | "info";
     text: string;
   } | null>(null);
+
+  const commands = useMemo(
+    () =>
+      createStorageExtensionCommands({
+        connectTimeoutMs: TIMEOUTS.CONNECTION_ATTEMPT,
+        onError: (error) =>
+          logger.error("[PiSentinel] Storage command cleanup failed:", error),
+      }),
+    [],
+  );
 
   const handleMessage = (msg: {
     type: "success" | "error" | "info";
@@ -49,7 +62,7 @@ export function App() {
         </div>
       )}
 
-      <InstanceList onMessage={handleMessage} />
+      <InstanceList commands={commands} onMessage={handleMessage} />
 
       <footer class="footer">
         <p>

@@ -390,9 +390,9 @@ export class PiholeApiClient {
         }
 
         // Check if error is retryable
-        const isRetryable =
-          result.error?.status &&
-          RETRY_CONFIG.RETRYABLE_STATUS_CODES.includes(result.error.status);
+        const isRetryable = RETRY_CONFIG.RETRYABLE_STATUS_CODES.some(
+          (status) => status === result.error?.status,
+        );
 
         // Don't retry auth errors (401, 403) or client errors (4xx)
         const isAuthError =
@@ -578,8 +578,16 @@ export class PiholeApiClient {
             `Response validation failed for ${endpoint}:`,
             validationError,
           );
-          // Continue anyway - validation is advisory, not blocking
-          // This helps catch API changes without breaking functionality
+          if (endpoint.startsWith(ENDPOINTS.QUERIES)) {
+            return {
+              success: false,
+              error: {
+                key: "invalid_response",
+                message: "Invalid query response",
+                status: response.status,
+              },
+            };
+          }
         }
 
         return { success: true, data };
@@ -732,9 +740,6 @@ export class PiholeApiClient {
   }
 }
 
-// Legacy singleton instance (for backwards compatibility during migration)
-export const apiClient = new PiholeApiClient();
-
 /**
  * API Client Manager
  *
@@ -820,6 +825,3 @@ export class ApiClientManager {
     this.authHandlers.clear();
   }
 }
-
-// Singleton manager instance
-export const apiClientManager = new ApiClientManager();

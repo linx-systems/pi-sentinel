@@ -10,7 +10,7 @@ import { expect, test } from "./fixtures";
 test.describe("Mock API Scenarios", () => {
   test("default scenario - normal operation", async ({ page, mockServer }) => {
     // Mock server already has default handlers configured
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     // Test API response
     const stats = await page.evaluate(async () => {
@@ -34,7 +34,7 @@ test.describe("Mock API Scenarios", () => {
       );
     });
 
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const authResponse = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/auth", {
@@ -64,7 +64,7 @@ test.describe("Mock API Scenarios", () => {
       );
     });
 
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const authResponse = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/auth", {
@@ -90,7 +90,7 @@ test.describe("Mock API Scenarios", () => {
       );
     });
 
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const blockingStatus = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/dns/blocking");
@@ -120,7 +120,7 @@ test.describe("Mock API Scenarios", () => {
       );
     });
 
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const stats = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/stats/summary");
@@ -150,7 +150,7 @@ test.describe("Mock API Scenarios", () => {
       );
     });
 
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const stats = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/stats/summary");
@@ -164,7 +164,7 @@ test.describe("Mock API Scenarios", () => {
 
 test.describe("Domain Management Scenarios", () => {
   test("add domain to allowlist", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/domains/allow/exact", {
@@ -180,7 +180,7 @@ test.describe("Domain Management Scenarios", () => {
   });
 
   test("add domain to denylist", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/domains/deny/exact", {
@@ -196,7 +196,7 @@ test.describe("Domain Management Scenarios", () => {
   });
 
   test("search for blocked domain", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch(
@@ -209,7 +209,7 @@ test.describe("Domain Management Scenarios", () => {
   });
 
   test("search for allowed domain", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/search/example.com");
@@ -222,7 +222,7 @@ test.describe("Domain Management Scenarios", () => {
 
 test.describe("Query Log Scenarios", () => {
   test("retrieve query log", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const queries = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/queries");
@@ -239,7 +239,7 @@ test.describe("Query Log Scenarios", () => {
     page,
     mockServer,
   }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const queries = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/queries");
@@ -258,7 +258,7 @@ test.describe("Query Log Scenarios", () => {
 
 test.describe("Blocking Control Scenarios", () => {
   test("enable blocking", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/dns/blocking", {
@@ -273,7 +273,7 @@ test.describe("Blocking Control Scenarios", () => {
   });
 
   test("disable blocking with timer", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/dns/blocking", {
@@ -289,7 +289,7 @@ test.describe("Blocking Control Scenarios", () => {
   });
 
   test("disable blocking indefinitely", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/dns/blocking", {

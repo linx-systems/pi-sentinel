@@ -8,25 +8,36 @@ import { StatsCard } from "./StatsCard";
 import { BlockingToggle } from "./BlockingToggle";
 import { InstanceSelector } from "~/components/InstanceSelector";
 import { DomainIcon, ExternalLinkIcon, SettingsIcon } from "~/utils/icons";
-import { DEFAULTS, STORAGE_KEYS } from "~/utils/constants";
+import { DEFAULTS } from "~/utils/constants";
 import { formatNumber } from "~/utils/utils";
 import { logger } from "~/utils/logger";
-import type { MessageResponse } from "~/utils/messaging";
-import type {
-  PersistedConfig,
-  PersistedInstances,
-  PiHoleInstance,
-} from "~/utils/types";
+import { createRuntimeExtensionCommands } from "~/utils/extension-commands";
+import type { PersistedInstances, PiHoleInstance } from "~/utils/types";
 import { useExtensionState } from "~/utils/hooks/useExtensionState";
 
 type ViewState = "loading" | "not-configured" | "connected" | "error";
+
+interface SidePanelApi {
+  open(options: { windowId?: number }): Promise<void>;
+}
+
+function hasSidePanelApi(value: object): value is { sidePanel: SidePanelApi } {
+  return (
+    "sidePanel" in value &&
+    typeof value.sidePanel === "object" &&
+    value.sidePanel !== null &&
+    "open" in value.sidePanel &&
+    typeof value.sidePanel.open === "function"
+  );
+}
+
+const commands = createRuntimeExtensionCommands();
 
 export function App() {
   // Use shared extension state hook
   const { state, isLoading, error: stateError, refetch } = useExtensionState();
   const [viewState, setViewState] = useState<ViewState>("loading");
   const [error, setError] = useState<string | null>(null);
-  const [piholeUrl, setPiholeUrl] = useState<string | null>(null);
   const [instances, setInstances] = useState<PiHoleInstance[]>([]);
   const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
   const [instancesLoaded, setInstancesLoaded] = useState(false);
@@ -67,7 +78,7 @@ export function App() {
     if (!instancesLoaded || !state?.isConnected) return;
     if (hasInstances && activeInstanceId === null) return;
 
-    const key = hasInstances ? (activeInstanceId ?? "legacy") : "legacy";
+    const key = activeInstanceId ?? "all";
     const now = Date.now();
     const lastUpdated = state?.statsLastUpdated || 0;
     const statsStale = now - lastUpdated > DEFAULTS.CACHE_TTL;
@@ -79,11 +90,11 @@ export function App() {
 
     if (statsStale && requestExpired) {
       lastStatsRequest.current = { key, at: now };
-      void browser.runtime
-        .sendMessage({ type: "GET_STATS" })
+      void commands
+        .getStats()
         .catch((err) => logger.debug("Failed to fetch stats for popup:", err));
-      void browser.runtime
-        .sendMessage({ type: "GET_BLOCKING_STATUS" })
+      void commands
+        .getBlockingStatus()
         .catch((err) =>
           logger.debug("Failed to fetch blocking status for popup:", err),
         );
@@ -100,52 +111,22 @@ export function App() {
     let config: PersistedInstances | null = null;
 
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: "GET_INSTANCES",
-      })) as MessageResponse<PersistedInstances>;
+      const response = await commands.getInstances();
 
-      if (response?.success && response.data) {
+      if (response.success) {
         config = response.data;
+      } else {
+        logger.error("Failed to fetch instances:", response.error);
       }
     } catch (err) {
       logger.error("Failed to fetch instances:", err);
     }
 
-    if (!config) {
-      try {
-        const stored = await browser.storage.local.get(STORAGE_KEYS.INSTANCES);
-        const storedConfig = stored[STORAGE_KEYS.INSTANCES] as
-          | PersistedInstances
-          | undefined;
-        if (storedConfig) {
-          config = storedConfig;
-        }
-      } catch (err) {
-        logger.error("Failed to read instances from storage:", err);
-      }
-    }
-
     if (config && config.instances.length > 0) {
       setInstances(config.instances);
       setActiveInstanceId(config.activeInstanceId ?? null);
-      setPiholeUrl(null);
-      setInstancesLoaded(true);
-      return;
     }
-
-    try {
-      const storage = await browser.storage.local.get(STORAGE_KEYS.CONFIG);
-      const legacy = storage[STORAGE_KEYS.CONFIG] as
-        | PersistedConfig
-        | undefined;
-      if (legacy?.piholeUrl) {
-        setPiholeUrl(legacy.piholeUrl);
-      }
-    } catch (err) {
-      logger.error("Failed to fetch legacy config:", err);
-    } finally {
-      setInstancesLoaded(true);
-    }
+    setInstancesLoaded(true);
   }, []);
 
   // Fetch instance config on mount and when instance list changes
@@ -174,7 +155,10 @@ export function App() {
       } else {
         // Chrome/Edge: use sidePanel API
         const window = await browser.windows.getCurrent();
-        await (chrome as any).sidePanel.open({ windowId: window.id });
+        if (!hasSidePanelApi(browser)) {
+          throw new Error("Browser side panel API is unavailable");
+        }
+        await browser.sidePanel.open({ windowId: window.id });
       }
     } catch {
       // Fallback: open sidebar panel in new tab
@@ -192,12 +176,9 @@ export function App() {
     : instances.length === 1
       ? instances[0]
       : null;
-  const adminUrl = hasInstances
-    ? (effectiveInstance?.piholeUrl ?? null)
-    : piholeUrl;
+  const adminUrl = effectiveInstance?.piholeUrl ?? null;
   const showAdminLink =
-    Boolean(adminUrl) &&
-    (!hasInstances || activeInstanceId !== null || instances.length === 1);
+    Boolean(adminUrl) && (activeInstanceId !== null || instances.length === 1);
 
   const openAdminPage = () => {
     if (adminUrl) {

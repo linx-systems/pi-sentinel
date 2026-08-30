@@ -43,110 +43,222 @@ describe("StateStore", () => {
     });
   });
 
-  describe("setState", () => {
-    it("should update state with partial values", () => {
-      store.setState({ isConnected: true });
+  describe("instance lifecycle transitions", () => {
+    const stats = {
+      queries: {
+        total: 10,
+        blocked: 2,
+        percent_blocked: 20,
+        unique_domains: 8,
+        forwarded: 4,
+        cached: 6,
+      },
+      clients: { active: 3, total: 5 },
+      gravity: { domains_being_blocked: 100, last_update: 123 },
+    };
 
-      const state = store.getState();
-      expect(state.isConnected).toBe(true);
-    });
+    it("projects the selected instance through connection and blocking snapshots", async () => {
+      await store.selectInstance("primary");
+      vi.clearAllMocks();
 
-    it("should merge with existing state", () => {
-      store.setState({ isConnected: true });
-      store.setState({ blockingEnabled: false });
+      await store.connectionSucceeded("primary");
+      expect(browser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+      vi.clearAllMocks();
 
-      const state = store.getState();
-      expect(state.isConnected).toBe(true);
-      expect(state.blockingEnabled).toBe(false);
-    });
+      await store.recordBlockingSnapshot("primary", {
+        blocking: "disabled",
+        timer: 60,
+      });
+      expect(browser.runtime.sendMessage).toHaveBeenCalledTimes(1);
 
-    it("should broadcast state update", () => {
-      store.setState({ isConnected: true });
-
-      expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
-        type: "STATE_UPDATED",
-        payload: expect.objectContaining({
-          isConnected: true,
-        }),
+      expect(store.getState()).toMatchObject({
+        isConnected: true,
+        blockingEnabled: false,
+        blockingTimer: 60,
+        totpRequired: false,
+        connectionError: null,
       });
     });
 
-    it("should notify listeners", () => {
-      const listener = vi.fn();
-      store.subscribe(listener);
+    it("records a TOTP challenge without marking the instance connected", async () => {
+      await store.selectInstance("primary");
+      await store.connectionSucceeded("primary");
+      vi.clearAllMocks();
 
-      store.setState({ isConnected: true });
+      await store.requireTotp("primary");
 
-      expect(listener).toHaveBeenCalledWith(
-        expect.objectContaining({ isConnected: true }),
-      );
+      expect(store.getInstanceState("primary")).toMatchObject({
+        isConnected: false,
+        totpRequired: true,
+        connectionError: null,
+      });
+      expect(browser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("publishes stats and blocking snapshots atomically", async () => {
+      await store.selectInstance("primary");
+      vi.clearAllMocks();
+
+      await store.recordStatsSnapshot("primary", stats);
+
+      expect(store.getInstanceState("primary")).toMatchObject({
+        stats,
+        statsLastUpdated: expect.any(Number),
+      });
+      expect(store.getCachedStats("primary")).toEqual(stats);
+      expect(browser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+
+      vi.clearAllMocks();
+      await store.recordBlockingSnapshot("primary", {
+        blocking: "disabled",
+        timer: 60,
+      });
+
+      expect(store.getInstanceState("primary")).toMatchObject({
+        blockingEnabled: false,
+        blockingTimer: 60,
+      });
+      expect(browser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("projects the selected instance and publishes selection once", async () => {
+      await store.connectionSucceeded("primary");
+      await store.connectionSucceeded("secondary");
+      await store.recordBlockingSnapshot("secondary", {
+        blocking: "disabled",
+        timer: null,
+      });
+      vi.clearAllMocks();
+
+      await store.selectInstance("secondary");
+
+      expect(store.getState()).toMatchObject({
+        isConnected: true,
+        blockingEnabled: false,
+      });
+      expect(browser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("disconnects by clearing session-derived state and its cache", async () => {
+      await store.selectInstance("primary");
+      await store.connectionSucceeded("primary");
+      await store.recordStatsSnapshot("primary", stats);
+      await store.recordBlockingSnapshot("primary", {
+        blocking: "disabled",
+        timer: 60,
+      });
+      vi.clearAllMocks();
+
+      await store.disconnectInstance("primary");
+
+      expect(store.getInstanceState("primary")).toEqual({
+        instanceId: "primary",
+        isConnected: false,
+        connectionError: null,
+        blockingEnabled: true,
+        blockingTimer: null,
+        stats: null,
+        statsLastUpdated: 0,
+        totpRequired: false,
+      });
+      expect(store.getCachedStats("primary")).toBeNull();
+      expect(browser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("removes the selected instance and publishes once", async () => {
+      await store.selectInstance("primary");
+      await store.connectionSucceeded("primary");
+      vi.clearAllMocks();
+
+      await store.removeInstance("primary");
+
+      expect(store.getActiveInstanceId()).toBeNull();
+      expect(store.getInstanceState("primary")).toBeNull();
+      expect(store.getState()).toMatchObject({ isConnected: false });
+      expect(browser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    it("rejects blocking snapshots for absent, disconnected, or TOTP-challenged instances", async () => {
+      await expect(
+        store.recordBlockingSnapshot("primary", {
+          blocking: "disabled",
+          timer: 60,
+        }),
+      ).resolves.toBe(false);
+      expect(store.getInstanceState("primary")).toBeNull();
+
+      await store.connectionSucceeded("primary");
+      await store.requireTotp("primary");
+      vi.clearAllMocks();
+
+      await expect(
+        store.recordBlockingSnapshot("primary", {
+          blocking: "disabled",
+          timer: 60,
+        }),
+      ).resolves.toBe(false);
+
+      expect(store.getInstanceState("primary")).toMatchObject({
+        isConnected: false,
+        totpRequired: true,
+        blockingEnabled: true,
+        blockingTimer: null,
+      });
+      expect(browser.runtime.sendMessage).not.toHaveBeenCalled();
     });
   });
 
-  describe("reset", () => {
-    it("should reset state to initial values", () => {
-      store.setState({ isConnected: true, blockingEnabled: false });
+  describe("state publication", () => {
+    it("tolerates the known no-receiver error after committing state", async () => {
+      vi.mocked(browser.runtime.sendMessage).mockRejectedValueOnce(
+        new Error(
+          "Could not establish connection. Receiving end does not exist.",
+        ),
+      );
 
-      store.reset();
-
-      const state = store.getState();
-      expect(state.isConnected).toBe(false);
-      expect(state.blockingEnabled).toBe(true);
+      await expect(
+        store.connectionSucceeded("primary"),
+      ).resolves.toBeUndefined();
+      expect(store.getInstanceState("primary")).toMatchObject({
+        isConnected: true,
+      });
     });
 
-    it("should clear all tab domains", () => {
-      store.initTabDomains(1, "https://example.com", "example.com");
+    it("rejects non-benign broadcast errors after committing state", async () => {
+      vi.mocked(browser.runtime.sendMessage).mockRejectedValueOnce(
+        new Error("runtime transport unavailable"),
+      );
 
-      store.reset();
-
-      const tabDomains = store.getTabDomains(1);
-      expect(tabDomains).toBeNull();
+      await expect(store.connectionSucceeded("primary")).rejects.toThrow(
+        "runtime transport unavailable",
+      );
+      expect(store.getInstanceState("primary")).toMatchObject({
+        isConnected: true,
+      });
     });
   });
 
   describe("subscribe", () => {
-    it("should add listener and call on state change", () => {
-      const listener = vi.fn();
-      store.subscribe(listener);
-
-      store.setState({ isConnected: true });
-
-      expect(listener).toHaveBeenCalled();
-    });
-
-    it("should return unsubscribe function", () => {
+    it("returns an unsubscribe function", async () => {
       const listener = vi.fn();
       const unsubscribe = store.subscribe(listener);
 
       unsubscribe();
-      store.setState({ isConnected: true });
+      await store.selectInstance("primary");
+      await store.connectionSucceeded("primary");
 
       expect(listener).not.toHaveBeenCalled();
     });
 
-    it("should handle multiple listeners", () => {
-      const listener1 = vi.fn();
-      const listener2 = vi.fn();
-
-      store.subscribe(listener1);
-      store.subscribe(listener2);
-
-      store.setState({ isConnected: true });
-
-      expect(listener1).toHaveBeenCalled();
-      expect(listener2).toHaveBeenCalled();
-    });
-
-    it("should catch and log listener errors", () => {
+    it("isolates listener errors", async () => {
       const errorListener = vi.fn().mockImplementation(() => {
         throw new Error("Listener error");
       });
       const consoleErrorSpy = vi
         .spyOn(console, "error")
         .mockImplementation(() => {});
-
       store.subscribe(errorListener);
-      store.setState({ isConnected: true });
+      await store.selectInstance("primary");
+      await store.connectionSucceeded("primary");
 
       expect(consoleErrorSpy).toHaveBeenCalled();
       consoleErrorSpy.mockRestore();

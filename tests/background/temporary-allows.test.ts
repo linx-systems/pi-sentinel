@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import mockBrowser from "../__mocks__/webextension-polyfill";
-import type { IPiholeClient } from "~/background/api/types";
+import type { TemporaryAllowClient } from "~/background/api/types";
 import { TemporaryAllowService } from "~/background/services/temporary-allows";
 import { ALARMS, STORAGE_KEYS } from "~/utils/constants";
 import type { PiHoleInstance, TemporaryAllowEntry } from "~/utils/types";
@@ -25,30 +25,10 @@ const instanceB: PiHoleInstance = {
 function createClient(options?: {
   exactAllow?: boolean;
   removeSuccess?: boolean;
-}): IPiholeClient {
+}): TemporaryAllowClient {
   const exactAllow = options?.exactAllow ?? false;
   const removeSuccess = options?.removeSuccess ?? true;
   return {
-    setBaseUrl: vi.fn(),
-    setSession: vi.fn(),
-    clearSession: vi.fn(),
-    hasSession: vi.fn(() => true),
-    authenticate: vi.fn(),
-    logout: vi.fn(),
-    getStats: vi.fn(),
-    getBlockingStatus: vi.fn(),
-    setBlocking: vi.fn(),
-    getQueries: vi.fn(),
-    getDomains: vi.fn(),
-    addDomain: vi.fn().mockResolvedValue({ success: true }),
-    removeDomain: vi.fn().mockResolvedValue(
-      removeSuccess
-        ? { success: true }
-        : {
-            success: false,
-            error: { key: "offline", message: "Offline", status: 0 },
-          },
-    ),
     searchDomain: vi.fn().mockImplementation(async (domain: string) => ({
       success: true,
       data: {
@@ -71,7 +51,15 @@ function createClient(options?: {
         },
       },
     })),
-    testConnection: vi.fn(),
+    addDomain: vi.fn().mockResolvedValue({ success: true }),
+    removeDomain: vi.fn().mockResolvedValue(
+      removeSuccess
+        ? { success: true }
+        : {
+            success: false,
+            error: { key: "offline", message: "Offline", status: 0 },
+          },
+    ),
   };
 }
 
@@ -79,7 +67,7 @@ describe("TemporaryAllowService", () => {
   let stored: Record<string, unknown>;
   let sessionStored: Record<string, unknown>;
   let now: number;
-  let clients: Map<string, IPiholeClient>;
+  let clients: Map<string, TemporaryAllowClient>;
   let service: TemporaryAllowService;
 
   beforeEach(() => {

@@ -1,15 +1,21 @@
 import { useState, useEffect } from "preact/hooks";
 import type { PiHoleInstance } from "~/utils/types";
-import { sendViaStorage } from "~/utils/storage-message";
-import { logger } from "~/utils/logger";
+import type { ExtensionCommands } from "~/utils/extension-commands";
+
+type InstanceModalCommands = Pick<
+  ExtensionCommands,
+  "testConnection" | "updateInstance" | "addInstance"
+>;
 
 interface InstanceModalProps {
+  commands: InstanceModalCommands;
   instance: PiHoleInstance | null; // null = add mode, otherwise edit mode
   onClose: () => void;
   onSaved: () => void;
 }
 
 export function InstanceModal({
+  commands,
   instance,
   onClose,
   onSaved,
@@ -58,18 +64,14 @@ export function InstanceModal({
         testUrl = `http://${testUrl}`;
       }
 
-      const response = await sendViaStorage<void>(
-        "pendingTestConnection",
-        "testConnectionResponse",
-        { url: testUrl },
-      );
+      const response = await commands.testConnection(testUrl);
 
       if (response.success) {
         setTestStatus("success");
         setUrl(testUrl);
       } else {
         setTestStatus("error");
-        setError(response.error || "Connection failed");
+        setError(response.error);
       }
     } catch (err) {
       setTestStatus("error");
@@ -96,37 +98,29 @@ export function InstanceModal({
           : password.length > 0
             ? password
             : undefined;
-        const response = await sendViaStorage<unknown>(
-          "pendingUpdateInstance",
-          "updateInstanceResponse",
-          {
-            instanceId: instance.id,
-            name: name || null,
-            piholeUrl: saveUrl,
-            password: passwordToSend, // Only send if provided or cleared
-            rememberPassword,
-          },
-        );
+        const response = await commands.updateInstance({
+          instanceId: instance.id,
+          name: name || null,
+          piholeUrl: saveUrl,
+          password: passwordToSend,
+          rememberPassword,
+        });
 
-        if (!response?.success) {
-          throw new Error(response?.error || "Failed to update instance");
+        if (!response.success) {
+          throw new Error(response.error);
         }
       } else {
         // Add new instance
         const passwordToSend = noPassword ? "" : password;
-        const response = await sendViaStorage<unknown>(
-          "pendingAddInstance",
-          "addInstanceResponse",
-          {
-            name: name || null,
-            piholeUrl: saveUrl,
-            password: passwordToSend,
-            rememberPassword,
-          },
-        );
+        const response = await commands.addInstance({
+          name: name || null,
+          piholeUrl: saveUrl,
+          password: passwordToSend,
+          rememberPassword,
+        });
 
-        if (!response?.success) {
-          throw new Error(response?.error || "Failed to add instance");
+        if (!response.success) {
+          throw new Error(response.error);
         }
       }
 

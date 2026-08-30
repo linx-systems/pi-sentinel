@@ -61,7 +61,6 @@
     "wxt": "^0.20.27"
   },
   "dependencies": {
-    "@linx-systems/pihole-api-client": "^0.1.2",
     "preact": "^10.29.8",
     "webextension-polyfill": "^0.12.0"
   },

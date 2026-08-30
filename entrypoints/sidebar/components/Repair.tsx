@@ -1,17 +1,15 @@
 import { useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import type { QueryEntry } from "~/utils/types";
-import type {
-  CreateTemporaryAllowsResult,
-  MessageResponse,
-  RemoveTemporaryAllowsResult,
-  SerializableTabDomains,
-} from "~/utils/messaging";
+import type { SerializableTabDomains } from "~/utils/messaging";
+import { createRuntimeExtensionCommands } from "~/utils/extension-commands";
 import { isQueryBlocked, isSameSite } from "~/utils/utils";
 import { logger } from "~/utils/logger";
 import { useToast } from "./ToastContext";
+import type { TemporaryAllows } from "./temporary-allows";
 
 const RECENT_QUERY_LIMIT = 100;
+const commands = createRuntimeExtensionCommands();
 const CAPTURE_WINDOW_SECONDS = 120;
 
 type TemporaryAllowDuration = 300 | 3600 | null;
@@ -24,7 +22,7 @@ export interface RepairCandidate {
 }
 
 interface RepairProps {
-  onTemporaryAllowsChanged: () => Promise<void>;
+  temporaryAllows: Pick<TemporaryAllows, "allow" | "revoke">;
 }
 
 function queryKey(query: QueryEntry): string {
@@ -109,7 +107,7 @@ async function waitForTabReload(tabId: number): Promise<void> {
   });
 }
 
-export function Repair({ onTemporaryAllowsChanged }: RepairProps) {
+export function Repair({ temporaryAllows }: RepairProps) {
   const { showToast } = useToast();
   const [candidates, setCandidates] = useState<RepairCandidate[]>([]);
   const [selectedDomains, setSelectedDomains] = useState<Set<string>>(
@@ -126,16 +124,16 @@ export function Repair({ onTemporaryAllowsChanged }: RepairProps) {
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
   const loadQueries = async (): Promise<QueryEntry[]> => {
-    const response = (await browser.runtime.sendMessage({
-      type: "GET_QUERIES",
-      payload: { length: RECENT_QUERY_LIMIT },
-    })) as MessageResponse<QueryEntry[]> | undefined;
+    const response = await commands.getQueries({ length: RECENT_QUERY_LIMIT });
 
-    if (!response?.success || !Array.isArray(response.data)) {
-      throw new Error(response?.error || "Could not read recent DNS queries.");
+    if (!response.success) {
+      throw new Error(response.error);
+    }
+    if (!response.data.complete) {
+      throw new Error("Could not read complete recent DNS queries.");
     }
 
-    return response.data;
+    return response.data.entries;
   };
 
   const capture = async () => {
@@ -162,17 +160,15 @@ export function Repair({ onTemporaryAllowsChanged }: RepairProps) {
       await waitForTabReload(tab.id);
 
       const [domainResponse, queries] = await Promise.all([
-        browser.runtime.sendMessage({
-          type: "GET_TAB_DOMAINS",
-          payload: { tabId: tab.id },
-        }) as Promise<MessageResponse<SerializableTabDomains> | undefined>,
+        commands.getTabDomains(tab.id),
         loadQueries(),
       ]);
 
-      if (!domainResponse?.success || !domainResponse.data) {
-        throw new Error(
-          domainResponse?.error || "Could not read domains for this page.",
-        );
+      if (!domainResponse.success) {
+        throw new Error(domainResponse.error);
+      }
+      if (!domainResponse.data) {
+        throw new Error("Could not read domains for this page.");
       }
 
       const windowStart = captureStartedAt - CAPTURE_WINDOW_SECONDS;
@@ -221,22 +217,18 @@ export function Repair({ onTemporaryAllowsChanged }: RepairProps) {
     setIsAllowing(true);
     setActionFeedback(null);
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: "CREATE_TEMPORARY_ALLOWS",
-        payload: { domains, durationSeconds },
-      })) as MessageResponse<CreateTemporaryAllowsResult> | undefined;
-      const result = response?.data;
-
-      if (!response?.success || !result) {
-        throw new Error(
-          response?.error || "Could not create the temporary allow.",
-        );
+      const response = await temporaryAllows.allow({
+        domains,
+        durationSeconds,
+      });
+      if (!response.success) {
+        throw new Error(response.error);
       }
+      const result = response.data;
 
       const createdIds = result.entries.map((entry) => entry.id);
       setEntryIds((current) => [...new Set([...current, ...createdIds])]);
       setSelectedDomains(new Set());
-      await onTemporaryAllowsChanged();
 
       const failures = result.failures.length;
       const skipped = result.skippedDomains.length;
@@ -268,21 +260,15 @@ export function Repair({ onTemporaryAllowsChanged }: RepairProps) {
     setIsUndoing(true);
     setActionFeedback(null);
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: "REMOVE_TEMPORARY_ALLOWS",
-        payload: { entryIds },
-      })) as MessageResponse<RemoveTemporaryAllowsResult> | undefined;
-      const result = response?.data;
-      if (!response?.success || !result) {
-        throw new Error(
-          response?.error || "Could not undo the temporary allows.",
-        );
+      const response = await temporaryAllows.revoke(entryIds);
+      if (!response.success) {
+        throw new Error(response.error);
       }
+      const result = response.data;
 
       const remaining = new Set(entryIds);
       result.removedIds.forEach((id) => remaining.delete(id));
       setEntryIds([...remaining]);
-      await onTemporaryAllowsChanged();
 
       const message = result.failures.length
         ? `Removed ${result.removedIds.length} entries; ${result.failures.length} could not be removed.`

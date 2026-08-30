@@ -1,6 +1,7 @@
 import browser from "webextension-polyfill";
 import { encryption } from "../crypto/encryption";
-import { DEFAULTS, STORAGE_KEYS } from "~/utils/constants";
+import { isSessionData } from "../session-storage";
+import { DEFAULTS, EXTENSION_ENTROPY, STORAGE_KEYS } from "~/utils/constants";
 import { logger } from "~/utils/logger";
 import { ErrorHandler, ErrorType } from "~/utils/error-handler";
 import type {
@@ -10,8 +11,12 @@ import type {
   PiHoleInstance,
 } from "~/utils/types";
 
-// Extension-specific entropy for encrypting master keys
-const EXTENSION_ENTROPY = "PiSentinel-v1-MasterKey-Encryption";
+type LegacyMigrationMarker = {
+  version: 1;
+  instanceId?: string;
+};
+
+const LEGACY_MIGRATION_KEY = "pisentinel_instances_migration_v1";
 
 /**
  * Instance Manager
@@ -30,6 +35,7 @@ export class InstanceManager {
    * Reduces storage I/O during frequent refreshes.
    */
   private instancesCache: PersistedInstances | null = null;
+  private instanceMutationTail: Promise<void> = Promise.resolve();
 
   /**
    * Initialize the instance manager.
@@ -58,6 +64,7 @@ export class InstanceManager {
         "Instance manager initialization",
         ErrorType.INTERNAL,
       );
+      throw error;
     }
   }
 
@@ -66,9 +73,8 @@ export class InstanceManager {
    * Uses in-memory cache to reduce storage I/O.
    */
   async getInstances(): Promise<PersistedInstances> {
-    // Return cached value if available
     if (this.instancesCache !== null) {
-      return this.instancesCache;
+      return structuredClone(this.instancesCache);
     }
 
     const defaultConfig: PersistedInstances = {
@@ -82,20 +88,14 @@ export class InstanceManager {
 
     try {
       const result = await browser.storage.local.get(STORAGE_KEYS.INSTANCES);
-      const instances = result[STORAGE_KEYS.INSTANCES] as
-        | PersistedInstances
-        | undefined;
-
-      const config = instances || defaultConfig;
-
-      // Store in cache
-      this.instancesCache = config;
-      return config;
+      const config =
+        (result[STORAGE_KEYS.INSTANCES] as PersistedInstances | undefined) ??
+        defaultConfig;
+      this.instancesCache = structuredClone(config);
+      return structuredClone(config);
     } catch (error) {
       logger.error("[InstanceManager] Failed to load instances:", error);
-      // Return default config on storage failure to keep extension functional
-      this.instancesCache = defaultConfig;
-      return defaultConfig;
+      throw error;
     }
   }
 
@@ -116,59 +116,38 @@ export class InstanceManager {
     password: string,
     rememberPassword: boolean,
   ): Promise<PiHoleInstance> {
-    const instanceId = crypto.randomUUID();
+    return this.mutateInstances(async () => {
+      const instanceId = crypto.randomUUID();
+      const masterKey = encryption.generateMasterPassword();
+      this.masterKeys.set(instanceId, masterKey);
+      await this.saveMasterKeyToSession(instanceId, masterKey);
 
-    // Generate master key for this instance
-    const masterKey = encryption.generateMasterPassword();
-    this.masterKeys.set(instanceId, masterKey);
+      const encryptedPassword = await encryption.encrypt(password, masterKey);
+      const encryptedMasterKey = rememberPassword
+        ? await encryption.encrypt(masterKey, EXTENSION_ENTROPY)
+        : null;
 
-    // Store master key in session storage
-    await this.saveMasterKeyToSession(instanceId, masterKey);
+      const instance: PiHoleInstance = {
+        id: instanceId,
+        name,
+        piholeUrl: piholeUrl.replace(/\/+$/, ""),
+        encryptedPassword,
+        encryptedMasterKey,
+        passwordless: password.length === 0,
+        rememberPassword,
+        createdAt: Date.now(),
+      };
 
-    // Encrypt the password
-    const encryptedPassword = await encryption.encrypt(password, masterKey);
+      const config = await this.getInstances();
+      config.instances.push(instance);
+      if (config.instances.length === 1) {
+        config.activeInstanceId = instanceId;
+      }
+      await this.saveInstances(config);
 
-    // If rememberPassword, also encrypt and persist the master key
-    let encryptedMasterKey: EncryptedData | null = null;
-    if (rememberPassword) {
-      encryptedMasterKey = await encryption.encrypt(
-        masterKey,
-        EXTENSION_ENTROPY,
-      );
-      logger.info(
-        `[addInstance] Encrypted master key for persistent storage: ${!!encryptedMasterKey}`,
-      );
-    }
-
-    logger.info(
-      `[addInstance] Creating instance with rememberPassword=${rememberPassword}, ` +
-        `hasEncryptedMasterKey=${!!encryptedMasterKey}`,
-    );
-
-    const instance: PiHoleInstance = {
-      id: instanceId,
-      name,
-      piholeUrl: piholeUrl.replace(/\/+$/, ""), // Normalize URL
-      encryptedPassword,
-      encryptedMasterKey,
-      passwordless: password.length === 0,
-      rememberPassword,
-      createdAt: Date.now(),
-    };
-
-    // Add to storage
-    const config = await this.getInstances();
-    config.instances.push(instance);
-
-    // If this is the first instance, set it as active
-    if (config.instances.length === 1) {
-      config.activeInstanceId = instanceId;
-    }
-
-    await this.saveInstances(config);
-
-    logger.info(`Added new instance: ${instanceId}`);
-    return instance;
+      logger.info(`Added new instance: ${instanceId}`);
+      return instance;
+    });
   }
 
   /**
@@ -183,81 +162,19 @@ export class InstanceManager {
       rememberPassword?: boolean;
     },
   ): Promise<PiHoleInstance | null> {
-    const config = await this.getInstances();
-    const index = config.instances.findIndex((i) => i.id === instanceId);
+    return this.mutateInstances(async () => {
+      const config = await this.getInstances();
+      const index = config.instances.findIndex((i) => i.id === instanceId);
+      if (index === -1) return null;
 
-    if (index === -1) {
-      return null;
-    }
-
-    const instance = config.instances[index];
-
-    // Update name
-    if (updates.name !== undefined) {
-      instance.name = updates.name;
-    }
-
-    // Update URL
-    if (updates.piholeUrl !== undefined) {
-      instance.piholeUrl = updates.piholeUrl.replace(/\/+$/, "");
-    }
-
-    // Update password if provided
-    if (updates.password !== undefined) {
-      let masterKey = this.masterKeys.get(instanceId);
-
-      // Try to recover master key from persistent storage if not in memory
-      if (!masterKey && instance.encryptedMasterKey) {
-        try {
-          masterKey = await encryption.decrypt(
-            instance.encryptedMasterKey,
-            EXTENSION_ENTROPY,
-          );
-          this.masterKeys.set(instanceId, masterKey);
-          await this.saveMasterKeyToSession(instanceId, masterKey);
-        } catch {
-          logger.warn(
-            `Failed to recover master key for instance: ${instanceId}`,
-          );
-        }
+      const instance = config.instances[index];
+      if (updates.name !== undefined) instance.name = updates.name;
+      if (updates.piholeUrl !== undefined) {
+        instance.piholeUrl = updates.piholeUrl.replace(/\/+$/, "");
       }
 
-      // If we still don't have the master key, generate a new one
-      if (!masterKey) {
-        masterKey = encryption.generateMasterPassword();
-        this.masterKeys.set(instanceId, masterKey);
-        await this.saveMasterKeyToSession(instanceId, masterKey);
-      }
-
-      instance.encryptedPassword = await encryption.encrypt(
-        updates.password,
-        masterKey,
-      );
-      instance.passwordless = updates.password.length === 0;
-
-      // Update encrypted master key based on rememberPassword setting
-      const shouldRemember =
-        updates.rememberPassword ?? instance.rememberPassword;
-      if (shouldRemember) {
-        instance.encryptedMasterKey = await encryption.encrypt(
-          masterKey,
-          EXTENSION_ENTROPY,
-        );
-      } else {
-        instance.encryptedMasterKey = null;
-      }
-    }
-
-    // Update rememberPassword setting
-    if (
-      updates.rememberPassword !== undefined &&
-      updates.password === undefined
-    ) {
-      if (updates.rememberPassword) {
-        // Need to encrypt and store the master key
+      if (updates.password !== undefined) {
         let masterKey = this.masterKeys.get(instanceId);
-
-        // Try to recover from persistent storage if not in memory
         if (!masterKey && instance.encryptedMasterKey) {
           try {
             masterKey = await encryption.decrypt(
@@ -267,78 +184,113 @@ export class InstanceManager {
             this.masterKeys.set(instanceId, masterKey);
             await this.saveMasterKeyToSession(instanceId, masterKey);
           } catch {
-            // Ignore - will handle below
+            logger.warn(
+              `Failed to recover master key for instance: ${instanceId}`,
+            );
           }
         }
-
-        if (masterKey) {
-          instance.rememberPassword = true;
-          instance.encryptedMasterKey = await encryption.encrypt(
-            masterKey,
-            EXTENSION_ENTROPY,
-          );
-        } else {
-          // Cannot enable - master key not available
-          logger.warn(
-            `Cannot enable rememberPassword for ${instanceId}: master key not available. ` +
-              `Re-enter password to enable this feature.`,
-          );
-          // Keep rememberPassword unchanged (don't set to true with null encryptedMasterKey)
+        if (!masterKey) {
+          masterKey = encryption.generateMasterPassword();
+          this.masterKeys.set(instanceId, masterKey);
+          await this.saveMasterKeyToSession(instanceId, masterKey);
         }
-      } else {
-        // Disabling remember password
-        instance.rememberPassword = false;
-        instance.encryptedMasterKey = null;
+        instance.encryptedPassword = await encryption.encrypt(
+          updates.password,
+          masterKey,
+        );
+        instance.passwordless = updates.password.length === 0;
+        const shouldRemember =
+          updates.rememberPassword ?? instance.rememberPassword;
+        instance.encryptedMasterKey = shouldRemember
+          ? await encryption.encrypt(masterKey, EXTENSION_ENTROPY)
+          : null;
       }
-    }
 
-    config.instances[index] = instance;
-    await this.saveInstances(config);
+      if (
+        updates.rememberPassword !== undefined &&
+        updates.password === undefined
+      ) {
+        if (updates.rememberPassword) {
+          let masterKey = this.masterKeys.get(instanceId);
+          if (!masterKey && instance.encryptedMasterKey) {
+            try {
+              masterKey = await encryption.decrypt(
+                instance.encryptedMasterKey,
+                EXTENSION_ENTROPY,
+              );
+              this.masterKeys.set(instanceId, masterKey);
+              await this.saveMasterKeyToSession(instanceId, masterKey);
+            } catch {
+              // The user must re-enter the password when recovery fails.
+            }
+          }
+          if (masterKey) {
+            instance.rememberPassword = true;
+            instance.encryptedMasterKey = await encryption.encrypt(
+              masterKey,
+              EXTENSION_ENTROPY,
+            );
+          } else {
+            logger.warn(
+              `Cannot enable rememberPassword for ${instanceId}: master key not available. Re-enter password to enable this feature.`,
+            );
+          }
+        } else {
+          instance.rememberPassword = false;
+          instance.encryptedMasterKey = null;
+        }
+      }
 
-    logger.info(`Updated instance: ${instanceId}`);
-    return instance;
+      config.instances[index] = instance;
+      await this.saveInstances(config);
+      logger.info(`Updated instance: ${instanceId}`);
+      return instance;
+    });
   }
 
   /**
    * Delete an instance.
    */
   async deleteInstance(instanceId: string): Promise<boolean> {
-    const config = await this.getInstances();
-    const index = config.instances.findIndex((i) => i.id === instanceId);
-
-    if (index === -1) {
-      return false;
-    }
-
-    // Remove from instances array
-    config.instances.splice(index, 1);
-
-    // Clear master key
-    this.masterKeys.delete(instanceId);
-
-    // Clean up session storage (non-critical, log failures but continue)
-    try {
-      await browser.storage.session.remove(`masterKey_${instanceId}`);
-      await browser.storage.session.remove(
-        `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`,
-      );
-    } catch (error) {
-      logger.warn(
-        `[InstanceManager] Failed to clean up session storage for ${instanceId}:`,
-        error,
-      );
-    }
-
-    // If deleted instance was active, switch to first available or null
-    if (config.activeInstanceId === instanceId) {
-      config.activeInstanceId =
-        config.instances.length > 0 ? config.instances[0].id : null;
-    }
-
-    await this.saveInstances(config);
-
+    const deleted = await this.removeInstanceConfiguration(instanceId);
+    if (!deleted) return false;
+    await this.deleteInstanceSessionMaterial(instanceId);
     logger.info(`Deleted instance: ${instanceId}`);
     return true;
+  }
+
+  /**
+   * Durably remove an instance configuration without touching credentials.
+   * Runtime deletion uses this after temporary-allow cleanup and before its
+   * ordered credential cleanup.
+   */
+  async removeInstanceConfiguration(instanceId: string): Promise<boolean> {
+    return this.mutateInstances(async () => {
+      const config = await this.getInstances();
+      const index = config.instances.findIndex((i) => i.id === instanceId);
+      if (index === -1) return false;
+
+      config.instances.splice(index, 1);
+      if (config.activeInstanceId === instanceId) {
+        config.activeInstanceId =
+          config.instances.length > 0 ? config.instances[0].id : null;
+      }
+      await this.saveInstances(config);
+      return true;
+    });
+  }
+
+  /**
+   * Removes only ephemeral credentials after their instance has been durably removed.
+   * This stays inside the background composition boundary so runtime callers
+   * cannot access credential material.
+   */
+  async deleteInstanceSessionMaterial(instanceId: string): Promise<void> {
+    await browser.storage.session.remove([
+      `masterKey_${instanceId}`,
+      `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`,
+    ]);
+    this.masterKeys.delete(instanceId);
   }
 
   /**
@@ -346,20 +298,18 @@ export class InstanceManager {
    * @param instanceId Instance ID or null for "All" mode
    */
   async setActiveInstance(instanceId: string | null): Promise<void> {
-    const config = await this.getInstances();
-
-    // Validate instance exists (if not null)
-    if (instanceId !== null) {
-      const exists = config.instances.some((i) => i.id === instanceId);
-      if (!exists) {
+    await this.mutateInstances(async () => {
+      const config = await this.getInstances();
+      if (
+        instanceId !== null &&
+        !config.instances.some((instance) => instance.id === instanceId)
+      ) {
         throw new Error(`Instance not found: ${instanceId}`);
       }
-    }
-
-    config.activeInstanceId = instanceId;
-    await this.saveInstances(config);
-
-    logger.info(`Set active instance: ${instanceId || "All"}`);
+      config.activeInstanceId = instanceId;
+      await this.saveInstances(config);
+      logger.info(`Set active instance: ${instanceId || "All"}`);
+    });
   }
 
   /**
@@ -378,17 +328,17 @@ export class InstanceManager {
     notificationsEnabled?: boolean;
     refreshInterval?: number;
   }): Promise<void> {
-    const config = await this.getInstances();
-
-    if (settings.notificationsEnabled !== undefined) {
-      config.globalSettings.notificationsEnabled =
-        settings.notificationsEnabled;
-    }
-    if (settings.refreshInterval !== undefined) {
-      config.globalSettings.refreshInterval = settings.refreshInterval;
-    }
-
-    await this.saveInstances(config);
+    await this.mutateInstances(async () => {
+      const config = await this.getInstances();
+      if (settings.notificationsEnabled !== undefined) {
+        config.globalSettings.notificationsEnabled =
+          settings.notificationsEnabled;
+      }
+      if (settings.refreshInterval !== undefined) {
+        config.globalSettings.refreshInterval = settings.refreshInterval;
+      }
+      await this.saveInstances(config);
+    });
   }
 
   /**
@@ -523,99 +473,314 @@ export class InstanceManager {
   }
 
   /**
-   * Migrate from single-instance to multi-instance format if needed.
+   * Converts a legacy single-instance snapshot into a verified multi-instance
+   * snapshot. The legacy source remains untouched: it is migration input only,
+   * never a runtime fallback.
+   *
+   * Each write is independently repeatable. The completion marker is the
+   * final write, after the local target and every available session value are
+   * read back and verified.
    */
   private async migrateIfNeeded(): Promise<void> {
-    // Check if already migrated
-    const existingInstances = await browser.storage.local.get(
+    const stored = await browser.storage.local.get([
       STORAGE_KEYS.INSTANCES,
+      STORAGE_KEYS.CONFIG,
+      LEGACY_MIGRATION_KEY,
+    ]);
+    if (this.isMigrationComplete(stored[LEGACY_MIGRATION_KEY])) {
+      return;
+    }
+
+    const legacyConfig = stored[STORAGE_KEYS.CONFIG];
+    if (!this.isLegacyConfig(legacyConfig)) {
+      return;
+    }
+
+    const expected = this.createMigrationTarget(legacyConfig);
+    const existing = stored[STORAGE_KEYS.INSTANCES];
+    const equivalent = this.findEquivalentLegacyInstance(
+      existing,
+      expected.instances[0],
     );
-    if (existingInstances[STORAGE_KEYS.INSTANCES]) {
-      logger.debug("Already using multi-instance format");
-      return;
-    }
-
-    // Check for legacy single-instance config
-    const legacyResult = await browser.storage.local.get(STORAGE_KEYS.CONFIG);
-    const legacyConfig = legacyResult[STORAGE_KEYS.CONFIG] as
-      | PersistedConfig
-      | undefined;
-
-    if (!legacyConfig?.piholeUrl) {
-      logger.debug("No legacy config to migrate");
-      return;
-    }
-
-    logger.info("Migrating from single-instance to multi-instance format");
-
-    // Create new instance from legacy config
-    const instanceId = crypto.randomUUID();
-
-    const instance: PiHoleInstance = {
-      id: instanceId,
-      name: null, // Will use hostname
-      piholeUrl: legacyConfig.piholeUrl,
-      encryptedPassword: legacyConfig.encryptedPassword,
-      encryptedMasterKey: legacyConfig.encryptedMasterKey,
-      rememberPassword: legacyConfig.rememberPassword,
-      passwordless: !legacyConfig.encryptedPassword,
-      createdAt: Date.now(),
-    };
-
-    const newConfig: PersistedInstances = {
-      instances: [instance],
-      activeInstanceId: instanceId,
-      globalSettings: {
-        notificationsEnabled: legacyConfig.notificationsEnabled,
-        refreshInterval: legacyConfig.refreshInterval,
-      },
-    };
-
-    // Save new format
-    await this.saveInstances(newConfig);
-
-    // Migrate session data if exists
-    const legacySession = await browser.storage.session.get([
+    const targetInstance = equivalent ?? expected.instances[0];
+    const instanceId = targetInstance.id;
+    const sessionMaterial = await browser.storage.session.get([
       STORAGE_KEYS.SESSION,
       "masterKey",
+      `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`,
+      `masterKey_${instanceId}`,
     ]);
+    const targetSessionKey = `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`;
+    const targetMasterKey = `masterKey_${instanceId}`;
+    const sourceSession =
+      sessionMaterial[targetSessionKey] ??
+      (isSessionData(sessionMaterial[STORAGE_KEYS.SESSION])
+        ? sessionMaterial[STORAGE_KEYS.SESSION]
+        : undefined);
+    const sourceMasterKey =
+      sessionMaterial[targetMasterKey] ?? sessionMaterial.masterKey;
 
-    if (legacySession[STORAGE_KEYS.SESSION]) {
-      // Move to instance-specific session key
-      await browser.storage.session.set({
-        [`${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`]:
-          legacySession[STORAGE_KEYS.SESSION],
-      });
+    if (
+      sourceSession !== undefined &&
+      !this.isEqual(sessionMaterial[targetSessionKey], sourceSession)
+    ) {
+      await browser.storage.session.set({ [targetSessionKey]: sourceSession });
     }
 
-    if (legacySession.masterKey) {
-      // Move to instance-specific master key
-      await browser.storage.session.set({
-        [`masterKey_${instanceId}`]: legacySession.masterKey,
-      });
-      this.masterKeys.set(instanceId, legacySession.masterKey as string);
+    if (
+      sourceMasterKey !== undefined &&
+      sessionMaterial[targetMasterKey] !== sourceMasterKey
+    ) {
+      await browser.storage.session.set({ [targetMasterKey]: sourceMasterKey });
     }
 
-    // Clean up legacy data (but keep backup for now)
-    // await browser.storage.local.remove(STORAGE_KEYS.CONFIG);
+    if (
+      !(await this.isMigrationSessionMaterialVerified(
+        instanceId,
+        sourceSession,
+        sourceMasterKey,
+      ))
+    ) {
+      throw new Error("Legacy migration credential verification failed");
+    }
 
-    logger.info(`Migration complete. Created instance: ${instanceId}`);
+    const target = this.mergeMigrationTarget(existing, expected);
+    if (!this.hasMigratedInstance(existing, targetInstance)) {
+      await this.saveInstances(target);
+    }
+
+    if (
+      !(await this.isMigrationTargetVerified(
+        targetInstance,
+        sourceSession,
+        sourceMasterKey,
+      ))
+    ) {
+      throw new Error("Legacy migration target verification failed");
+    }
+
+    await browser.storage.local.set({
+      [LEGACY_MIGRATION_KEY]: {
+        version: 1,
+        instanceId,
+      } satisfies LegacyMigrationMarker,
+    });
+    logger.info(`Migrated legacy configuration to instance: ${instanceId}`);
   }
 
-  /**
-   * Save instances configuration to storage.
-   * PERF-3: Also updates the in-memory cache.
-   */
+  private isLegacyConfig(value: unknown): value is PersistedConfig {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const config = value as Record<string, unknown>;
+    return (
+      typeof config.piholeUrl === "string" &&
+      config.piholeUrl.length > 0 &&
+      Number.isFinite(config.refreshInterval) &&
+      typeof config.notificationsEnabled === "boolean" &&
+      typeof config.rememberPassword === "boolean" &&
+      this.isEncryptedDataOrNull(config.encryptedPassword) &&
+      this.isEncryptedDataOrNull(config.encryptedMasterKey)
+    );
+  }
+
+  private isEncryptedDataOrNull(value: unknown): value is EncryptedData | null {
+    if (value === null) {
+      return true;
+    }
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const encrypted = value as Record<string, unknown>;
+    return (
+      typeof encrypted.ciphertext === "string" &&
+      typeof encrypted.salt === "string" &&
+      typeof encrypted.iv === "string"
+    );
+  }
+
+  private createMigrationTarget(legacy: PersistedConfig): PersistedInstances {
+    const instanceId = `legacy-${this.fingerprintLegacyConfig(legacy)}`;
+    return {
+      instances: [
+        {
+          id: instanceId,
+          name: null,
+          piholeUrl: legacy.piholeUrl,
+          encryptedPassword: legacy.encryptedPassword,
+          encryptedMasterKey: legacy.encryptedMasterKey,
+          rememberPassword: legacy.rememberPassword,
+          passwordless: legacy.encryptedPassword === null,
+          createdAt: Date.now(),
+        },
+      ],
+      activeInstanceId: instanceId,
+      globalSettings: {
+        notificationsEnabled: legacy.notificationsEnabled,
+        refreshInterval: legacy.refreshInterval,
+      },
+    };
+  }
+
+  private fingerprintLegacyConfig(legacy: PersistedConfig): string {
+    const input = JSON.stringify([
+      legacy.piholeUrl,
+      legacy.encryptedPassword,
+      legacy.encryptedMasterKey,
+      legacy.rememberPassword,
+    ]);
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < input.length; index += 1) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  }
+
+  private mergeMigrationTarget(
+    existing: unknown,
+    expected: PersistedInstances,
+  ): PersistedInstances {
+    if (!this.isPersistedInstances(existing)) {
+      return expected;
+    }
+
+    const target = structuredClone(existing);
+    const expectedInstance = expected.instances[0];
+    if (
+      target.instances.some((instance) =>
+        this.isSameLegacyInstance(instance, expectedInstance),
+      )
+    ) {
+      return target;
+    }
+
+    target.instances.push(expectedInstance);
+    return target;
+  }
+
+  private isPersistedInstances(value: unknown): value is PersistedInstances {
+    return (
+      !!value &&
+      typeof value === "object" &&
+      Array.isArray((value as PersistedInstances).instances) &&
+      "activeInstanceId" in value &&
+      "globalSettings" in value
+    );
+  }
+
+  private isSameLegacyInstance(
+    candidate: PiHoleInstance,
+    expected: PiHoleInstance,
+  ): boolean {
+    return (
+      candidate.piholeUrl === expected.piholeUrl &&
+      candidate.rememberPassword === expected.rememberPassword &&
+      candidate.passwordless === expected.passwordless &&
+      this.isEqual(candidate.encryptedPassword, expected.encryptedPassword) &&
+      this.isEqual(candidate.encryptedMasterKey, expected.encryptedMasterKey)
+    );
+  }
+
+  private findEquivalentLegacyInstance(
+    value: unknown,
+    expected: PiHoleInstance,
+  ): PiHoleInstance | undefined {
+    if (!this.isPersistedInstances(value)) {
+      return undefined;
+    }
+    return value.instances.find((instance) =>
+      this.isSameLegacyInstance(instance, expected),
+    );
+  }
+
+  private hasMigratedInstance(
+    value: unknown,
+    expected: PiHoleInstance,
+  ): boolean {
+    return (
+      this.isPersistedInstances(value) &&
+      value.instances.some(
+        (instance) =>
+          instance.id === expected.id &&
+          this.isSameLegacyInstance(instance, expected),
+      )
+    );
+  }
+
+  private async isMigrationTargetVerified(
+    expected: PiHoleInstance,
+    sourceSession: unknown,
+    sourceMasterKey: unknown,
+  ): Promise<boolean> {
+    const stored = await browser.storage.local.get(STORAGE_KEYS.INSTANCES);
+    return (
+      this.hasMigratedInstance(stored[STORAGE_KEYS.INSTANCES], expected) &&
+      (await this.isMigrationSessionMaterialVerified(
+        expected.id,
+        sourceSession,
+        sourceMasterKey,
+      ))
+    );
+  }
+
+  private async isMigrationSessionMaterialVerified(
+    instanceId: string,
+    sourceSession: unknown,
+    sourceMasterKey: unknown,
+  ): Promise<boolean> {
+    const keys = [
+      ...(sourceSession === undefined
+        ? []
+        : [`${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`]),
+      ...(sourceMasterKey === undefined ? [] : [`masterKey_${instanceId}`]),
+    ];
+    if (keys.length === 0) {
+      return true;
+    }
+
+    const sessionMaterial = await browser.storage.session.get(keys);
+    return (
+      (sourceSession === undefined ||
+        this.isEqual(
+          sessionMaterial[
+            `${STORAGE_KEYS.INSTANCE_SESSION_PREFIX}${instanceId}`
+          ],
+          sourceSession,
+        )) &&
+      (sourceMasterKey === undefined ||
+        sessionMaterial[`masterKey_${instanceId}`] === sourceMasterKey)
+    );
+  }
+
+  private isMigrationComplete(value: unknown): value is LegacyMigrationMarker {
+    return (
+      !!value &&
+      typeof value === "object" &&
+      (value as LegacyMigrationMarker).version === 1
+    );
+  }
+
+  private isEqual(left: unknown, right: unknown): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  private mutateInstances<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.instanceMutationTail
+      .catch(() => undefined)
+      .then(operation);
+    this.instanceMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   private async saveInstances(config: PersistedInstances): Promise<void> {
-    // PERF-3: Update cache before writing to storage
-    // This ensures the cache is immediately up-to-date
-    this.instancesCache = config;
-    await browser.storage.local.set({ [STORAGE_KEYS.INSTANCES]: config });
+    const snapshot = structuredClone(config);
+    await browser.storage.local.set({ [STORAGE_KEYS.INSTANCES]: snapshot });
+    this.instancesCache = snapshot;
   }
-
-  /**
-   * Load master keys from session storage into memory.
-   */
   private async loadMasterKeysFromSession(): Promise<void> {
     const config = await this.getInstances();
 
@@ -624,8 +789,7 @@ export class InstanceManager {
         `masterKey_${instance.id}`,
       );
       const masterKey = result[`masterKey_${instance.id}`] as
-        | string
-        | undefined;
+        string | undefined;
       if (masterKey) {
         this.masterKeys.set(instance.id, masterKey);
       }

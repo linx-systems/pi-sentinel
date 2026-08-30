@@ -4,6 +4,7 @@ interface TotpInputProps {
   onSubmit: (totp: string, password?: string) => Promise<void>;
   onCancel?: () => void;
   isLoading: boolean;
+  error?: string | null;
   showPassword?: boolean;
 }
 
@@ -11,6 +12,7 @@ export function TotpInput({
   onSubmit,
   onCancel,
   isLoading,
+  error,
   showPassword = true,
 }: TotpInputProps) {
   const [code, setCode] = useState("");
@@ -53,6 +55,8 @@ export function TotpInput({
           This code changes every 30 seconds.
         </p>
       </div>
+
+      {error && <div class="error-message">{error}</div>}
 
       <form onSubmit={handleSubmit}>
         <div class="totp-section">

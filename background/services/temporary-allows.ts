@@ -1,5 +1,5 @@
 import browser from "webextension-polyfill";
-import type { ApiResult, IPiholeClient } from "~/background/api/types";
+import type { ApiResult, TemporaryAllowClient } from "~/background/api/types";
 import { ALARMS, STORAGE_KEYS } from "~/utils/constants";
 import type {
   CreateTemporaryAllowsResult,
@@ -16,7 +16,7 @@ interface TemporaryAllowDependencies {
     instances: PiHoleInstance[];
     activeInstanceId: string | null;
   }>;
-  getClient(instanceId: string): IPiholeClient | undefined;
+  getClient(instanceId: string): TemporaryAllowClient | undefined;
   now?: () => number;
   createId?: () => string;
 }
@@ -248,6 +248,31 @@ export class TemporaryAllowService {
         await this.broadcast(remaining);
       }
       return result;
+    });
+  }
+
+  async removeForInstance(instanceId: string): Promise<void> {
+    await this.runExclusive(async () => {
+      const entries = await this.readEntries();
+      const managedEntries = entries.filter(
+        (entry) => entry.instanceId === instanceId,
+      );
+
+      for (const entry of managedEntries) {
+        const failure = await this.removeEntry(entry);
+        if (failure) {
+          throw new Error(failure.error);
+        }
+      }
+
+      if (managedEntries.length === 0) return;
+
+      const remaining = entries.filter(
+        (entry) => entry.instanceId !== instanceId,
+      );
+      await this.writeEntries(remaining);
+      await this.reschedule(remaining);
+      await this.broadcast(remaining);
     });
   }
 

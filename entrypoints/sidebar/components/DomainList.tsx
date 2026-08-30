@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import {
   BlockIcon,
@@ -12,38 +12,25 @@ import {
 import { isSameSite } from "~/utils/utils";
 import { logger } from "~/utils/logger";
 import type { TemporaryAllowEntry } from "~/utils/types";
-import type { MessageResponse } from "~/utils/messaging";
-import { useToast } from "./ToastContext";
+import {
+  createDomainInspection,
+  type DomainInspectionResult,
+} from "~/utils/domain-inspection";
 
 interface DomainListProps {
   domains: string[];
-  thirdPartyDomains: string[];
   firstPartyDomain: string;
-  onAddToList: (domain: string, listType: "allow" | "deny") => Promise<void>;
-  temporaryAllows: TemporaryAllowEntry[];
+  onAddToList: (domain: string, listType: "allow" | "deny") => Promise<boolean>;
+  temporaryAllows: readonly TemporaryAllowEntry[];
   onCreateTemporaryAllow: (
     domain: string,
     durationSeconds: number | null,
-  ) => Promise<void>;
-  onRemoveTemporaryAllows: (entryIds: string[]) => Promise<void>;
+  ) => Promise<boolean>;
+  onRemoveTemporaryAllows: (entryIds: string[]) => Promise<boolean>;
 }
-
-type SearchResult = {
-  gravity: boolean;
-  allowlist: boolean;
-  denylist: boolean;
-  instances?: Array<{
-    instanceId: string;
-    instanceName?: string;
-    gravity: boolean;
-    allowlist: boolean;
-    denylist: boolean;
-  }>;
-};
 
 export function DomainList({
   domains,
-  thirdPartyDomains,
   firstPartyDomain,
   onAddToList,
   temporaryAllows,
@@ -51,97 +38,50 @@ export function DomainList({
   onRemoveTemporaryAllows,
 }: DomainListProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<Map<string, SearchResult>>(
-    new Map(),
-  );
   const [now, setNow] = useState(() => Date.now());
+  const [isSearchingAll, setIsSearchingAll] = useState(false);
+  const [isAutoSearching, setIsAutoSearching] = useState(false);
+  const [autoSearchEnabled, setAutoSearchEnabled] = useState(false);
+  const [dismissedDomains, setDismissedDomains] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [inspection] = useState(() => createDomainInspection());
+  const [, renderInspection] = useState(0);
+
+  useEffect(() => {
+    const unsubscribe = inspection.subscribe(() =>
+      renderInspection((revision) => revision + 1),
+    );
+    return () => {
+      unsubscribe();
+      inspection.destroy();
+    };
+  }, [inspection]);
 
   useEffect(() => {
     if (!temporaryAllows.some((entry) => entry.expiresAt !== null)) return;
     const interval = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(interval);
   }, [temporaryAllows]);
-  const [isSearchingAll, setIsSearchingAll] = useState(false);
-  const { showToast } = useToast();
 
-  // Auto-search state
-  const [autoSearchEnabled, setAutoSearchEnabled] = useState(false);
-  const [autoSearchProgress, setAutoSearchProgress] = useState<{
-    current: number;
-    total: number;
-    retrying?: boolean;
-  } | null>(null);
-
-  // Track search state per domain (success/failed/pending)
-  const domainSearchState = useRef<
-    Map<string, "pending" | "searching" | "success" | "failed">
-  >(new Map());
-
-  // Track retry attempts per domain (max 2 retries = 3 total attempts)
-  const retryAttempts = useRef<Map<string, number>>(new Map());
-  const MAX_RETRIES = 2;
-
-  // Track currently searching domains to prevent duplicate searches
-  const currentlySearching = useRef<Set<string>>(new Set());
-
-  // Circuit breaker to stop auto-search if API is failing
-  const circuitBreaker = useRef<{ failures: number; lastFailure: number }>({
-    failures: 0,
-    lastFailure: 0,
-  });
-
-  // Load auto-search preference and cached results from storage on mount
-  // NOTE: Auto-search is OFF by default to prevent overwhelming Pi-hole
   useEffect(() => {
     browser.storage.local
-      .get(["pisentinel_autoSearch", "pisentinel_searchCache"])
+      .get("pisentinel_autoSearch")
       .then((result) => {
-        // Only enable if explicitly set to true
         setAutoSearchEnabled(result.pisentinel_autoSearch === true);
-
-        // Load cached search results (with 24 hour expiry)
-        if (result.pisentinel_searchCache) {
-          const cache = result.pisentinel_searchCache as {
-            data: Record<string, any>;
-            timestamp: number;
-          };
-          const age = Date.now() - cache.timestamp;
-          const MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
-
-          if (age < MAX_AGE) {
-            const cachedMap = new Map<string, SearchResult>(
-              Object.entries(cache.data),
-            );
-            setSearchResults(cachedMap);
-            logger.debug(
-              `[DomainList] Loaded ${cachedMap.size} cached search results`,
-            );
-          } else {
-            logger.debug("[DomainList] Search cache expired, clearing");
-            browser.storage.local
-              .remove("pisentinel_searchCache")
-              .catch((err) =>
-                logger.error("[DomainList] Failed to clear cache:", err),
-              );
-          }
-        }
       })
       .catch((error) => {
         logger.error(
-          "[DomainList] Failed to load settings from storage:",
+          "[DomainList] Failed to load auto-search preference:",
           error,
         );
       });
   }, []);
 
-  // Clear search state when page changes
   useEffect(() => {
-    domainSearchState.current.clear();
-    retryAttempts.current.clear();
-    currentlySearching.current.clear();
+    setDismissedDomains(new Set());
   }, [firstPartyDomain]);
 
-  // Toggle auto-search and persist to storage
   const toggleAutoSearch = async (enabled: boolean) => {
     setAutoSearchEnabled(enabled);
     try {
@@ -151,266 +91,75 @@ export function DomainList({
         "[DomainList] Failed to save auto-search preference:",
         error,
       );
-      // UI already shows the change; next session will use default (false)
     }
   };
 
-  // Auto-search logic with retry support
   useEffect(() => {
     if (!autoSearchEnabled) return;
-
-    // Find domains that haven't succeeded and aren't currently being searched
-    const newDomains = domains.filter(
-      (d) =>
-        !searchResults.has(d) &&
-        domainSearchState.current.get(d) !== "success" &&
-        !currentlySearching.current.has(d),
-    );
-
-    if (newDomains.length === 0) return;
-
-    // Mark domains as currently being searched
-    newDomains.forEach((d) => currentlySearching.current.add(d));
-
     let cancelled = false;
-
-    const searchDomain = async (
-      domain: string,
-    ): Promise<{ success: boolean; shouldRetry: boolean }> => {
-      try {
-        if (cancelled) return { success: false, shouldRetry: false };
-
-        const response = (await browser.runtime.sendMessage({
-          type: "SEARCH_DOMAIN",
-          payload: { domain },
-        })) as MessageResponse<SearchResult> | undefined;
-
-        if (!cancelled && response?.success && response.data) {
-          setSearchResult(domain, response.data);
-          domainSearchState.current.set(domain, "success");
-          // Reset circuit breaker on success
-          circuitBreaker.current.failures = 0;
-          return { success: true, shouldRetry: false };
-        }
-
-        // Track failure - should retry transient errors
-        circuitBreaker.current.failures++;
-        circuitBreaker.current.lastFailure = Date.now();
-        domainSearchState.current.set(domain, "failed");
-
-        // Retry transient errors (no data, API errors) but not permanent errors
-        return { success: false, shouldRetry: true };
-      } catch (err) {
-        logger.error(`Auto-search failed for ${domain}:`, err);
-        // Track failure
-        circuitBreaker.current.failures++;
-        circuitBreaker.current.lastFailure = Date.now();
-        domainSearchState.current.set(domain, "failed");
-
-        // Retry on network/API errors
-        return { success: false, shouldRetry: true };
-      }
-    };
-
-    const searchNewDomains = async () => {
-      const CONCURRENT_LIMIT = 2; // Reduced from 5 to 2 for Raspberry Pi
-      const BASE_DELAY = 500; // Increased from 300ms to 500ms
-      const MAX_FAILURES = 3; // Stop if 3 consecutive failures
-      const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff for retries
-
-      const queue = [...newDomains];
-      let searchedCount = 0;
-      let consecutiveFailures = 0;
-      const failedDomains: Array<{ domain: string; shouldRetry: boolean }> = [];
-
-      setAutoSearchProgress({ current: 0, total: newDomains.length });
-
-      // Initial search pass
-      while (queue.length > 0 && !cancelled) {
-        // Circuit breaker: Stop if too many failures
-        if (circuitBreaker.current.failures >= MAX_FAILURES) {
-          const timeSinceLastFailure =
-            Date.now() - circuitBreaker.current.lastFailure;
-          if (timeSinceLastFailure < 30000) {
-            // 30 second cooldown
-            logger.warn(
-              "[DomainList] Circuit breaker triggered - too many API failures.",
-            );
-
-            // Show toast notification
-            showToast({
-              type: "warning",
-              message:
-                "Auto-search stopped due to repeated Pi-hole errors. Check your connection.",
-              duration: 8000,
-            });
-
-            setAutoSearchProgress(null);
-            // Clear currently searching for remaining domains
-            queue.forEach((d) => currentlySearching.current.delete(d));
-            return;
-          } else {
-            // Reset after cooldown
-            circuitBreaker.current.failures = 0;
-          }
-        }
-
-        const batch = queue.splice(0, CONCURRENT_LIMIT);
-
-        // Execute batch concurrently
-        const results = await Promise.all(
-          batch.map(async (domain) => {
-            const result = await searchDomain(domain);
-            return { domain, ...result };
-          }),
-        );
-
-        // Count failures in this batch
-        const batchFailures = results.filter((r) => !r.success).length;
-        if (batchFailures === batch.length) {
-          consecutiveFailures++;
-        } else {
-          consecutiveFailures = 0;
-        }
-
-        // Track failed domains for retry
-        for (const result of results) {
-          currentlySearching.current.delete(result.domain);
-
-          if (!result.success && result.shouldRetry) {
-            const attempts = retryAttempts.current.get(result.domain) || 0;
-            if (attempts < MAX_RETRIES) {
-              failedDomains.push({ domain: result.domain, shouldRetry: true });
-            }
-          }
-        }
-
-        searchedCount += batch.length;
-        if (!cancelled) {
-          setAutoSearchProgress({
-            current: searchedCount,
-            total: newDomains.length,
-          });
-        }
-
-        // Rate limit between batches with exponential backoff on failures
-        if (!cancelled && queue.length > 0) {
-          const delay =
-            BASE_DELAY * Math.pow(2, Math.min(consecutiveFailures, 3));
-          await new Promise((r) => setTimeout(r, delay));
-        }
-      }
-
-      // Retry failed domains
-      if (failedDomains.length > 0 && !cancelled) {
-        logger.debug(
-          `[DomainList] Retrying ${failedDomains.length} failed domains`,
-        );
-
-        for (const { domain } of failedDomains) {
-          if (cancelled) break;
-
-          const currentAttempt = (retryAttempts.current.get(domain) || 0) + 1;
-          retryAttempts.current.set(domain, currentAttempt);
-
-          // Wait with exponential backoff before retry
-          const retryDelay =
-            RETRY_DELAYS[Math.min(currentAttempt - 1, RETRY_DELAYS.length - 1)];
-          await new Promise((r) => setTimeout(r, retryDelay));
-
-          setAutoSearchProgress({
-            current: currentAttempt,
-            total: failedDomains.length,
-            retrying: true,
-          });
-
-          currentlySearching.current.add(domain);
-          const result = await searchDomain(domain);
-          currentlySearching.current.delete(domain);
-
-          // If still failing and haven't hit max retries, add back to queue
-          if (
-            !result.success &&
-            result.shouldRetry &&
-            currentAttempt < MAX_RETRIES
-          ) {
-            failedDomains.push({ domain, shouldRetry: true });
-          }
-        }
-      }
-
-      if (!cancelled) {
-        setAutoSearchProgress(null);
-      }
-    };
-
-    // Handle the promise to avoid unhandled promise warning
-    searchNewDomains().catch((err) => {
-      logger.error("[DomainList] Auto-search error:", err);
-      setAutoSearchProgress(null);
-    });
-
-    // Cleanup function to cancel on unmount
+    setIsAutoSearching(true);
+    void inspection
+      .lookupMany(domains)
+      .catch((error) => logger.error("[DomainList] Auto-search failed:", error))
+      .finally(() => {
+        if (!cancelled) setIsAutoSearching(false);
+      });
     return () => {
       cancelled = true;
-      setAutoSearchProgress(null);
-      // Remove cancelled domains from currently searching
-      newDomains.forEach((d) => currentlySearching.current.delete(d));
     };
-  }, [domains, autoSearchEnabled]);
+  }, [autoSearchEnabled, domains, inspection]);
 
-  const setSearchResult = (domain: string, result: SearchResult | null) => {
-    setSearchResults((prev) => {
-      const next = new Map(prev);
-      if (result) {
-        next.set(domain, result);
-      } else {
-        next.delete(domain);
-      }
+  const lookupDomain = (domain: string) => {
+    setDismissedDomains((current) => {
+      if (!current.has(domain)) return current;
+      const next = new Set(current);
 
-      // Cache results to storage (debounced via async)
-      setTimeout(() => {
-        const cacheData = Object.fromEntries(next.entries());
-        browser.storage.local
-          .set({
-            pisentinel_searchCache: {
-              data: cacheData,
-              timestamp: Date.now(),
-            },
-          })
-          .catch((err) =>
-            logger.error("[DomainList] Failed to cache results:", err),
-          );
-      }, 500);
-
+      next.delete(domain);
       return next;
     });
+    void inspection.lookup(domain);
+  };
+
+  const afterListMutation = async (operation: () => Promise<boolean>) => {
+    const changed = await operation();
+    if (changed) inspection.clear();
+    return changed;
+  };
+
+  const addDomainToList = async (
+    domain: string,
+    listType: "allow" | "deny",
+  ) => {
+    if (await afterListMutation(() => onAddToList(domain, listType))) {
+      void inspection.lookup(domain);
+    }
+  };
+
+  const createTemporaryAllow = async (
+    domain: string,
+    durationSeconds: number | null,
+  ): Promise<void> => {
+    await afterListMutation(() =>
+      onCreateTemporaryAllow(domain, durationSeconds),
+    );
+  };
+
+  const removeTemporaryAllows = async (entryIds: string[]): Promise<void> => {
+    await afterListMutation(() => onRemoveTemporaryAllows(entryIds));
   };
 
   const handleSearchAll = async () => {
-    const allDomains = [...new Set(domains)];
     setIsSearchingAll(true);
-
-    for (const domain of allDomains) {
-      try {
-        const response = (await browser.runtime.sendMessage({
-          type: "SEARCH_DOMAIN",
-          payload: { domain },
-        })) as MessageResponse<SearchResult> | undefined;
-
-        if (response?.success && response.data) {
-          setSearchResult(domain, response.data);
-        }
-      } catch (err) {
-        logger.error(`Search failed for ${domain}:`, err);
-      }
+    try {
+      await inspection.lookupMany(domains);
+    } finally {
+      setIsSearchingAll(false);
     }
-
-    setIsSearchingAll(false);
   };
 
   const clearAllResults = () => {
-    setSearchResults(new Map());
+    inspection.clear();
+    setDismissedDomains(new Set());
   };
 
   // Separate first-party and third-party domains
@@ -467,21 +216,22 @@ export function DomainList({
           />
           <span>Auto</span>
         </label>
-        {autoSearchProgress && (
-          <span class="auto-search-status">
-            {autoSearchProgress.retrying ? "Retrying... " : ""}
-            {autoSearchProgress.current}/{autoSearchProgress.total}
-          </span>
+        {isAutoSearching && (
+          <span class="auto-search-status">Searching...</span>
         )}
         <button
           class="search-all-btn"
           onClick={handleSearchAll}
-          disabled={isSearchingAll || autoSearchProgress !== null}
+          disabled={isSearchingAll || isAutoSearching}
           title="Search all domains in Pi-hole"
         >
           {isSearchingAll ? <SpinnerIcon /> : <SearchAllIcon />}
         </button>
-        {searchResults.size > 0 && (
+        {domains.some(
+          (domain) =>
+            !dismissedDomains.has(domain) &&
+            inspection.resultFor(domain) !== undefined,
+        ) && (
           <button
             class="clear-results-btn"
             onClick={clearAllResults}
@@ -504,14 +254,21 @@ export function DomainList({
                 temporaryAllows={temporaryAllows.filter(
                   (entry) => entry.domain === domain,
                 )}
-                onCreateTemporaryAllow={onCreateTemporaryAllow}
-                onRemoveTemporaryAllows={onRemoveTemporaryAllows}
+                onCreateTemporaryAllow={createTemporaryAllow}
+                onRemoveTemporaryAllows={removeTemporaryAllows}
                 now={now}
                 domain={domain}
                 isFirstParty
-                onAddToList={onAddToList}
-                searchResult={searchResults.get(domain) || null}
-                onSearchResult={(result) => setSearchResult(domain, result)}
+                onAddToList={addDomainToList}
+                searchResult={
+                  dismissedDomains.has(domain)
+                    ? null
+                    : (inspection.resultFor(domain) ?? null)
+                }
+                onSearch={() => lookupDomain(domain)}
+                onDismiss={() =>
+                  setDismissedDomains((current) => new Set(current).add(domain))
+                }
               />
             ))}
           </ul>
@@ -530,14 +287,21 @@ export function DomainList({
                 temporaryAllows={temporaryAllows.filter(
                   (entry) => entry.domain === domain,
                 )}
-                onCreateTemporaryAllow={onCreateTemporaryAllow}
-                onRemoveTemporaryAllows={onRemoveTemporaryAllows}
+                onCreateTemporaryAllow={createTemporaryAllow}
+                onRemoveTemporaryAllows={removeTemporaryAllows}
                 now={now}
                 domain={domain}
                 isFirstParty={false}
-                onAddToList={onAddToList}
-                searchResult={searchResults.get(domain) || null}
-                onSearchResult={(result) => setSearchResult(domain, result)}
+                onAddToList={addDomainToList}
+                searchResult={
+                  dismissedDomains.has(domain)
+                    ? null
+                    : (inspection.resultFor(domain) ?? null)
+                }
+                onSearch={() => lookupDomain(domain)}
+                onDismiss={() =>
+                  setDismissedDomains((current) => new Set(current).add(domain))
+                }
               />
             ))}
           </ul>
@@ -557,15 +321,16 @@ interface DomainItemProps {
   domain: string;
   isFirstParty: boolean;
   onAddToList: (domain: string, listType: "allow" | "deny") => Promise<void>;
-  temporaryAllows: TemporaryAllowEntry[];
+  temporaryAllows: readonly TemporaryAllowEntry[];
   now: number;
   onCreateTemporaryAllow: (
     domain: string,
     durationSeconds: number | null,
   ) => Promise<void>;
   onRemoveTemporaryAllows: (entryIds: string[]) => Promise<void>;
-  searchResult: SearchResult | null;
-  onSearchResult: (result: SearchResult | null) => void;
+  searchResult: DomainInspectionResult | null;
+  onSearch(): void;
+  onDismiss(): void;
 }
 
 function DomainItem({
@@ -577,23 +342,10 @@ function DomainItem({
   onCreateTemporaryAllow,
   onRemoveTemporaryAllows,
   searchResult,
-  onSearchResult,
+  onSearch,
+  onDismiss,
 }: DomainItemProps) {
   const [temporaryDuration, setTemporaryDuration] = useState<string>("300");
-  const handleSearch = async () => {
-    try {
-      const response = (await browser.runtime.sendMessage({
-        type: "SEARCH_DOMAIN",
-        payload: { domain },
-      })) as MessageResponse<SearchResult> | undefined;
-
-      if (response?.success && response.data) {
-        onSearchResult(response.data);
-      }
-    } catch (err) {
-      logger.error("Search failed:", err);
-    }
-  };
 
   const createTemporaryAllow = () => {
     const durationSeconds =
@@ -624,7 +376,7 @@ function DomainItem({
           </button>
           <button
             class="action-btn search"
-            onClick={handleSearch}
+            onClick={onSearch}
             title="Search in Pi-hole"
           >
             <SearchIcon />
@@ -673,18 +425,18 @@ function DomainItem({
       {searchResult && (
         <div class="search-result domain-search-result">
           <div class="instance-search-results">
-            {searchResult.instances && searchResult.instances.length > 0 ? (
-              searchResult.instances.map((res) => {
-                const label = res.instanceName || res.instanceId;
+            {searchResult.entries.length > 0 &&
+              searchResult.entries.map((result) => {
+                const label = result.instanceName || result.instanceId;
                 return (
-                  <div class="instance-search-row" key={label}>
+                  <div class="instance-search-row" key={result.instanceId}>
                     <span class="instance-badge">{label}</span>
                     <span class="search-status">
-                      {res.denylist ? (
+                      {result.denylist ? (
                         <span class="status-denylist">● Denylisted</span>
-                      ) : res.allowlist ? (
+                      ) : result.allowlist ? (
                         <span class="status-allowlist">● Allowlisted</span>
-                      ) : res.gravity ? (
+                      ) : result.gravity ? (
                         <span class="status-blocked">● Blocked (gravity)</span>
                       ) : (
                         <span class="status-allowed">○ Not in blocklist</span>
@@ -692,24 +444,18 @@ function DomainItem({
                     </span>
                   </div>
                 );
-              })
-            ) : (
-              <div class="instance-search-row">
-                {searchResult.denylist ? (
-                  <span class="status-denylist">● Denylisted</span>
-                ) : searchResult.allowlist ? (
-                  <span class="status-allowlist">● Allowlisted</span>
-                ) : searchResult.gravity ? (
-                  <span class="status-blocked">● Blocked (gravity)</span>
-                ) : (
-                  <span class="status-allowed">○ Not in blocklist</span>
-                )}
+              })}
+            {!searchResult.complete && (
+              <div class="instance-search-row search-incomplete">
+                {searchResult.failures.length > 0
+                  ? `Search incomplete: ${searchResult.failures.map((failure) => `${failure.instanceName} unavailable (${failure.message})`).join("; ")}.`
+                  : "Search incomplete: no connected instances."}
               </div>
             )}
           </div>
           <button
             class="dismiss-btn two-row"
-            onClick={() => onSearchResult(null)}
+            onClick={onDismiss}
             title="Dismiss"
           >
             ×

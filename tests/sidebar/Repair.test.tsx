@@ -3,12 +3,25 @@ import { render, screen } from "@testing-library/preact";
 import type { QueryEntry } from "~/utils/types";
 import type { SerializableTabDomains } from "~/utils/messaging";
 
-const { sendMessage } = vi.hoisted(() => ({ sendMessage: vi.fn() }));
-vi.mock("webextension-polyfill", () => ({
-  default: {
-    runtime: { sendMessage, getManifest: () => ({}) },
-    storage: { local: { get: () => Promise.resolve({}) } },
-  },
+const {
+  createTemporaryAllows,
+  getQueries,
+  getTabDomains,
+  removeTemporaryAllows,
+} = vi.hoisted(() => ({
+  createTemporaryAllows: vi.fn(),
+  getQueries: vi.fn(),
+  getTabDomains: vi.fn(),
+  removeTemporaryAllows: vi.fn(),
+}));
+
+vi.mock("~/utils/extension-commands", () => ({
+  createRuntimeExtensionCommands: () => ({
+    createTemporaryAllows,
+    getQueries,
+    getTabDomains,
+    removeTemporaryAllows,
+  }),
 }));
 
 import {
@@ -93,11 +106,16 @@ describe("rankRepairCandidates", () => {
   });
 });
 
+const temporaryAllows = {
+  allow: createTemporaryAllows,
+  revoke: removeTemporaryAllows,
+};
+
 describe("Repair", () => {
   it("does not query or change Pi-hole until capture is explicitly started", () => {
     render(
       <ToastProvider>
-        <Repair onTemporaryAllowsChanged={async () => {}} />
+        <Repair temporaryAllows={temporaryAllows} />
       </ToastProvider>,
     );
     expect(
@@ -107,6 +125,9 @@ describe("Repair", () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(false);
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(getQueries).not.toHaveBeenCalled();
+    expect(getTabDomains).not.toHaveBeenCalled();
+    expect(createTemporaryAllows).not.toHaveBeenCalled();
+    expect(removeTemporaryAllows).not.toHaveBeenCalled();
   });
 });

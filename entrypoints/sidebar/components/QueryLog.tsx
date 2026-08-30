@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import type { TargetedEvent } from "preact";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import browser from "webextension-polyfill";
 import {
   ArrowUpIcon,
@@ -11,36 +12,46 @@ import {
 import { isQueryBlocked } from "~/utils/utils";
 import { logger } from "~/utils/logger";
 import type { QueryEntry } from "~/utils/types";
-import type { MessageResponse } from "~/utils/messaging";
+import { createRuntimeExtensionCommands } from "~/utils/extension-commands";
+import {
+  createDomainInspection,
+  type DomainInspectionResult,
+} from "~/utils/domain-inspection";
 
-type InstanceSearchResult = {
-  instanceId: string;
-  instanceName?: string;
-  gravity: boolean;
-  allowlist: boolean;
-  denylist: boolean;
-};
-
-type SearchResult = {
-  gravity: boolean;
-  allowlist: boolean;
-  denylist: boolean;
-  instances?: InstanceSearchResult[];
-};
+const commands = createRuntimeExtensionCommands();
 
 interface QueryLogProps {
-  onAddToList: (domain: string, listType: "allow" | "deny") => Promise<void>;
+  onAddToList: (domain: string, listType: "allow" | "deny") => Promise<boolean>;
 }
 
 const REFRESH_INTERVAL = 5000; // 5 seconds
 
+const getQueryKey = (query: QueryEntry) =>
+  `${query.instanceId || "single"}-${query.id ?? `${query.timestamp}-${query.domain}`}`;
+
+const sortQueries = (items: QueryEntry[]) =>
+  [...items].sort((left, right) => right.timestamp - left.timestamp);
+
 export function QueryLog({ onAddToList }: QueryLogProps) {
   const [queries, setQueries] = useState<QueryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [queryNotice, setQueryNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "blocked" | "allowed">("all");
-  const [searchResults, setSearchResults] = useState<Map<string, SearchResult>>(
-    new Map(),
+  const [inspection] = useState(() => createDomainInspection());
+  const [, renderInspection] = useState(0);
+  const [dismissedDomains, setDismissedDomains] = useState<Set<string>>(
+    () => new Set(),
   );
+
+  useEffect(() => {
+    const unsubscribe = inspection.subscribe(() =>
+      renderInspection((revision) => revision + 1),
+    );
+    return () => {
+      unsubscribe();
+      inspection.destroy();
+    };
+  }, [inspection]);
 
   // Auto-refresh state
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
@@ -50,29 +61,36 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
   const [isScrolledDown, setIsScrolledDown] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [newQueryCount, setNewQueryCount] = useState(0);
+  const isScrolledDownRef = useRef(false);
 
   // Track if initial load has happened (not relying on queries.length due to closure issues)
   const hasLoadedOnce = useRef(false);
 
-  const getQueryKey = (q: QueryEntry) =>
-    `${q.instanceId || "single"}-${q.id ?? `${q.timestamp}-${q.domain}`}`;
-
-  const sortQueries = (items: QueryEntry[]) =>
-    [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-
   // Load auto-refresh preference on mount
   useEffect(() => {
     browser.storage.local.get("pisentinel_queryAutoRefresh").then((result) => {
-      if (result.pisentinel_queryAutoRefresh !== undefined) {
-        setAutoRefreshEnabled(result.pisentinel_queryAutoRefresh);
+      if (result.pisentinel_queryAutoRefresh === true) {
+        setAutoRefreshEnabled(true);
+      } else if (result.pisentinel_queryAutoRefresh === false) {
+        setAutoRefreshEnabled(false);
       }
     });
   }, []);
 
   // Handle disconnection - stop auto-refresh
   useEffect(() => {
-    const handleMessage = (msg: any) => {
-      if (msg.type === "STATE_UPDATED" && !msg.payload?.isConnected) {
+    const handleMessage = (message: unknown) => {
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        message.type === "STATE_UPDATED" &&
+        "payload" in message &&
+        typeof message.payload === "object" &&
+        message.payload !== null &&
+        "isConnected" in message.payload &&
+        message.payload.isConnected === false
+      ) {
         setAutoRefreshEnabled(false);
       }
     };
@@ -87,10 +105,125 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
     await browser.storage.local.set({ pisentinel_queryAutoRefresh: enabled });
   };
 
+  // Handle scroll with onScroll event
+  const handleScroll = (event: TargetedEvent<HTMLDivElement, Event>) => {
+    const container = event.currentTarget;
+    const scrolledDown = container.scrollTop > 50; // More than 50px from top
+
+    if (!scrolledDown && isScrolledDownRef.current) {
+      // User scrolled back to top - reset count
+      setNewQueryCount(0);
+    }
+
+    isScrolledDownRef.current = scrolledDown;
+    setIsScrolledDown(scrolledDown);
+  };
+
+  // Reset scroll state when filter changes
+  useEffect(() => {
+    isScrolledDownRef.current = false;
+    setIsScrolledDown(false);
+    setNewQueryCount(0);
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
+  }, [filter]);
+
+  // Back-to-top handler
+  const scrollToTop = () => {
+    scrollContainerRef.current?.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+    isScrolledDownRef.current = false;
+    setNewQueryCount(0);
+    setIsScrolledDown(false);
+  };
+
+  const lookupDomain = (domain: string) => {
+    setDismissedDomains((current) => {
+      if (!current.has(domain)) return current;
+      const next = new Set(current);
+      next.delete(domain);
+      return next;
+    });
+    void inspection.lookup(domain);
+  };
+
+  const addDomainToList = async (
+    domain: string,
+    listType: "allow" | "deny",
+  ): Promise<boolean> => {
+    const added = await onAddToList(domain, listType);
+    if (added) {
+      inspection.clear();
+      lookupDomain(domain);
+    }
+    return added;
+  };
+
+  const loadQueries = useCallback(async () => {
+    const isInitialLoad = !hasLoadedOnce.current;
+
+    // Show loading only on initial load
+    if (isInitialLoad) {
+      setIsLoading(true);
+    }
+
+    try {
+      const response = await commands.getQueries({ length: 100 });
+
+      if (response.success) {
+        const { entries: queryData, failures, complete } = response.data;
+        setQueryNotice(
+          complete
+            ? null
+            : failures.length > 0
+              ? `Query results incomplete: ${failures.map((failure) => `${failure.instanceName} unavailable (${failure.message})`).join("; ")}.`
+              : "Query results incomplete: no connected instances.",
+        );
+        const normalized = sortQueries(queryData);
+
+        if (isInitialLoad) {
+          setQueries(normalized);
+          hasLoadedOnce.current = true;
+        } else {
+          setQueries((previousQueries) => {
+            const existingIds = new Set(previousQueries.map(getQueryKey));
+            const newQueries = normalized.filter(
+              (query) => !existingIds.has(getQueryKey(query)),
+            );
+
+            if (newQueries.length > 0 && isScrolledDownRef.current) {
+              setNewQueryCount(
+                (previousCount) => previousCount + newQueries.length,
+              );
+            }
+
+            // Use the normalized/sorted list so we keep cross-instance order
+            return normalized;
+          });
+        }
+      } else {
+        setQueryNotice(response.error);
+      }
+    } catch (error) {
+      setQueryNotice(
+        error instanceof Error
+          ? error.message
+          : "Unable to load query results.",
+      );
+      logger.error("Failed to load queries:", error);
+    } finally {
+      if (isInitialLoad) {
+        setIsLoading(false);
+      }
+    }
+  }, []);
   // Initial load
   useEffect(() => {
-    loadQueries();
-  }, []);
+    void loadQueries();
+  }, [loadQueries]);
 
   // Auto-refresh interval
   useEffect(() => {
@@ -111,106 +244,7 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
         clearInterval(refreshIntervalRef.current);
       }
     };
-  }, [autoRefreshEnabled]);
-
-  // Handle scroll with onScroll event
-  const handleScroll = (e: Event) => {
-    const container = e.target as HTMLDivElement;
-    const scrolledDown = container.scrollTop > 50; // More than 50px from top
-
-    if (!scrolledDown && isScrolledDown) {
-      // User scrolled back to top - reset count
-      setNewQueryCount(0);
-    }
-
-    setIsScrolledDown(scrolledDown);
-  };
-
-  // Reset scroll state when filter changes
-  useEffect(() => {
-    setIsScrolledDown(false);
-    setNewQueryCount(0);
-    if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = 0;
-    }
-  }, [filter]);
-
-  // Back-to-top handler
-  const scrollToTop = () => {
-    scrollContainerRef.current?.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
-    setNewQueryCount(0);
-    setIsScrolledDown(false);
-  };
-
-  const setSearchResult = (domain: string, result: SearchResult | null) => {
-    setSearchResults((prev) => {
-      const next = new Map(prev);
-      if (result) {
-        next.set(domain, result);
-      } else {
-        next.delete(domain);
-      }
-      return next;
-    });
-  };
-
-  const loadQueries = async () => {
-    const isInitialLoad = !hasLoadedOnce.current;
-
-    // Show loading only on initial load
-    if (isInitialLoad) {
-      setIsLoading(true);
-    }
-
-    try {
-      const response = (await browser.runtime.sendMessage({
-        type: "GET_QUERIES",
-        payload: { length: 100 },
-      })) as MessageResponse<QueryEntry[]> | undefined;
-
-      if (response?.success && response.data) {
-        const queryData = Array.isArray(response.data) ? response.data : [];
-        const normalized = sortQueries(
-          queryData.map((q) => ({
-            ...q,
-            // Some Pi-hole versions return "time" instead of timestamp
-            timestamp:
-              typeof q.timestamp === "number"
-                ? q.timestamp
-                : Number((q as any).time ?? 0) || 0,
-          })),
-        );
-
-        if (isInitialLoad) {
-          setQueries(normalized);
-          hasLoadedOnce.current = true;
-        } else {
-          setQueries((prev) => {
-            const existingIds = new Set(prev.map((q) => getQueryKey(q)));
-            const newQueries = normalized.filter(
-              (q) => !existingIds.has(getQueryKey(q)),
-            );
-
-            if (newQueries.length > 0 && isScrolledDown) {
-              setNewQueryCount((prevCount) => prevCount + newQueries.length);
-            }
-
-            // Use the normalized/sorted list so we keep cross-instance order
-            return normalized;
-          });
-        }
-      }
-    } catch (err) {
-      logger.error("Failed to load queries:", err);
-    } finally {
-      if (isInitialLoad) {
-        setIsLoading(false);
-      }
-    }
-  };
+  }, [autoRefreshEnabled, loadQueries]);
 
   const filteredQueries = queries.filter((q) => {
     if (!q) return false;
@@ -288,10 +322,17 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
         </button>
       </div>
 
-      {filteredQueries.length === 0 ? (
-        <div class="empty-state">
-          <p>No queries to display.</p>
+      {queryNotice && (
+        <div class="query-results-notice" role="status">
+          {queryNotice}
         </div>
+      )}
+      {filteredQueries.length === 0 ? (
+        !queryNotice && (
+          <div class="empty-state">
+            <p>No queries to display.</p>
+          </div>
+        )
       ) : (
         <div
           ref={scrollContainerRef}
@@ -303,11 +344,19 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
               <QueryItem
                 key={getQueryKey(query) || index}
                 query={query}
-                onAddToList={onAddToList}
-                searchResult={searchResults.get(query.domain) || null}
-                onSearchResult={(result) =>
-                  setSearchResult(query.domain, result)
+                onAddToList={addDomainToList}
+                searchResult={
+                  dismissedDomains.has(query.domain)
+                    ? null
+                    : (inspection.resultFor(query.domain) ?? null)
                 }
+                onSearch={() => lookupDomain(query.domain)}
+                onDismiss={() =>
+                  setDismissedDomains((current) =>
+                    new Set(current).add(query.domain),
+                  )
+                }
+                onClear={() => inspection.clear()}
               />
             ) : null,
           )}
@@ -332,62 +381,47 @@ export function QueryLog({ onAddToList }: QueryLogProps) {
 
 interface QueryItemProps {
   query: QueryEntry;
-  onAddToList: (domain: string, listType: "allow" | "deny") => Promise<void>;
-  searchResult: SearchResult | null;
-  onSearchResult: (result: SearchResult | null) => void;
+  onAddToList: (domain: string, listType: "allow" | "deny") => Promise<boolean>;
+  searchResult: DomainInspectionResult | null;
+  onSearch(): void;
+  onDismiss(): void;
+  onClear(): void;
 }
 
 function QueryItem({
   query,
   onAddToList,
   searchResult,
-  onSearchResult,
+  onSearch,
+  onDismiss,
+  onClear,
 }: QueryItemProps) {
   const blocked = isQueryBlocked(query.status);
   const instanceLabel = query.instanceName || query.instanceId;
-
-  // Handle timestamp - Pi-hole v6 uses 'time' as Unix timestamp (seconds with decimals)
-  const rawTime = (query as any).time || query.timestamp;
+  // Query timestamps are normalized to Unix seconds at the fleet boundary.
+  const rawTime = query.timestamp;
   let timeStr = "Unknown";
   if (rawTime) {
-    const ts = rawTime * 1000; // Convert seconds to milliseconds
-    const date = new Date(ts);
+    const timestamp = rawTime * 1000; // Convert seconds to milliseconds
+    const date = new Date(timestamp);
     if (!isNaN(date.getTime())) {
       timeStr = date.toLocaleTimeString();
     }
   }
 
-  // Handle client - Pi-hole v6 returns {ip, name} object
-  const clientInfo =
-    typeof query.client === "object" && query.client
-      ? (query.client as any).name || (query.client as any).ip || "?"
-      : query.client || "?";
-
-  const handleSearch = async () => {
-    try {
-      const response = (await browser.runtime.sendMessage({
-        type: "SEARCH_DOMAIN",
-        payload: { domain: query.domain },
-      })) as MessageResponse<SearchResult> | undefined;
-
-      if (response?.success && response.data) {
-        onSearchResult(response.data);
-      }
-    } catch (err) {
-      logger.error("Search failed:", err);
-    }
-  };
+  const clientInfo = query.client || "?";
 
   const handleRemove = async (listType: "allow" | "deny") => {
     try {
-      const messageType =
-        listType === "allow" ? "REMOVE_FROM_ALLOWLIST" : "REMOVE_FROM_DENYLIST";
-      await browser.runtime.sendMessage({
-        type: messageType,
-        payload: { domain: query.domain },
-      });
-      // Clear search result after removal
-      onSearchResult(null);
+      const response = await (listType === "allow"
+        ? commands.removeFromAllowlist(query.domain)
+        : commands.removeFromDenylist(query.domain));
+      if (!response?.success) {
+        logger.error("Remove failed:", response?.error ?? "Unknown failure");
+        return;
+      }
+      onDismiss();
+      onClear();
     } catch (err) {
       logger.error("Remove failed:", err);
     }
@@ -428,7 +462,7 @@ function QueryItem({
               </button>
               <button
                 class="action-btn search"
-                onClick={handleSearch}
+                onClick={onSearch}
                 title="Search domain status"
               >
                 <SearchIcon size={14} />
@@ -439,71 +473,52 @@ function QueryItem({
 
         {searchResult && (
           <div class="search-result">
-            {searchResult.instances && searchResult.instances.length > 1 ? (
-              <div class="instance-search-results">
-                {searchResult.instances.map((res) => {
-                  const label = res.instanceName || res.instanceId;
-                  return (
-                    <div class="instance-search-row" key={label}>
-                      <span class="instance-badge">{label}</span>
-                      {res.denylist ? (
-                        <span class="status-denylist" data-bullet="●">
-                          Denylisted
-                        </span>
-                      ) : res.allowlist ? (
-                        <span class="status-allowlist" data-bullet="●">
-                          Allowlisted
-                        </span>
-                      ) : res.gravity ? (
-                        <span class="status-blocked" data-bullet="●">
-                          Blocked (gravity)
-                        </span>
-                      ) : (
-                        <span class="status-allowed" data-bullet="○">
-                          Not in blocklist
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <>
-                {searchResult.denylist ? (
-                  <span class="status-denylist" data-bullet="●">
-                    Denylisted
+            <div class="instance-search-results">
+              {searchResult.entries.map((result) => (
+                <div class="instance-search-row" key={result.instanceId}>
+                  <span class="instance-badge">
+                    {result.instanceName || result.instanceId}
                   </span>
-                ) : searchResult.allowlist ? (
-                  <span class="status-allowlist" data-bullet="●">
-                    Allowlisted
-                  </span>
-                ) : searchResult.gravity ? (
-                  <span class="status-blocked" data-bullet="●">
-                    Blocked (gravity)
-                  </span>
-                ) : (
-                  <span class="status-allowed" data-bullet="○">
-                    Not in blocklist
-                  </span>
-                )}
-                {(searchResult.allowlist || searchResult.denylist) && (
-                  <button
-                    class="remove-btn"
-                    onClick={() =>
-                      handleRemove(searchResult.allowlist ? "allow" : "deny")
-                    }
-                    title="Remove from list"
-                  >
-                    Remove
-                  </button>
-                )}
-              </>
-            )}
-            <button
-              class="dismiss-btn"
-              onClick={() => onSearchResult(null)}
-              title="Dismiss"
-            >
+                  {result.denylist ? (
+                    <span class="status-denylist" data-bullet="●">
+                      Denylisted
+                    </span>
+                  ) : result.allowlist ? (
+                    <span class="status-allowlist" data-bullet="●">
+                      Allowlisted
+                    </span>
+                  ) : result.gravity ? (
+                    <span class="status-blocked" data-bullet="●">
+                      Blocked (gravity)
+                    </span>
+                  ) : (
+                    <span class="status-allowed" data-bullet="○">
+                      Not in blocklist
+                    </span>
+                  )}
+                  {searchResult.entries.length === 1 &&
+                    (result.allowlist || result.denylist) && (
+                      <button
+                        class="remove-btn"
+                        onClick={() =>
+                          handleRemove(result.allowlist ? "allow" : "deny")
+                        }
+                        title="Remove from list"
+                      >
+                        Remove
+                      </button>
+                    )}
+                </div>
+              ))}
+              {!searchResult.complete && (
+                <div class="instance-search-row search-incomplete">
+                  {searchResult.failures.length > 0
+                    ? `Search incomplete: ${searchResult.failures.map((failure) => `${failure.instanceName} unavailable (${failure.message})`).join("; ")}.`
+                    : "Search incomplete: no connected instances."}
+                </div>
+              )}
+            </div>
+            <button class="dismiss-btn" onClick={onDismiss} title="Dismiss">
               x
             </button>
           </div>

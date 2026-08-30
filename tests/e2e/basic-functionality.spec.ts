@@ -63,7 +63,7 @@ test.describe("Extension Popup Access", () => {
 test.describe("API Mocking Verification", () => {
   test("mock server returns stats correctly", async ({ page, mockServer }) => {
     // Mock server is already running on localhost:8765
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     // Make a test API call via fetch
     const response = await page.evaluate(async () => {
@@ -77,7 +77,7 @@ test.describe("API Mocking Verification", () => {
   });
 
   test("mock server handles authentication", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/auth", {

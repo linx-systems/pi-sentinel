@@ -1,9 +1,11 @@
 import { useState } from "preact/hooks";
-import browser from "webextension-polyfill";
+import type { ExtensionCommands } from "~/utils/extension-commands";
 import { logger } from "~/utils/logger";
-import { sendMessage } from "~/utils/messaging";
+
+type ServerConfigCommands = Pick<ExtensionCommands, "testConnection">;
 
 interface ServerConfigProps {
+  commands: ServerConfigCommands;
   onSave: (
     url: string,
     password: string,
@@ -12,7 +14,11 @@ interface ServerConfigProps {
   isLoading: boolean;
 }
 
-export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
+export function ServerConfig({
+  commands,
+  onSave,
+  isLoading,
+}: ServerConfigProps) {
   const [url, setUrl] = useState("");
   const [password, setPassword] = useState("");
   const [rememberPassword, setRememberPassword] = useState(false);
@@ -35,17 +41,14 @@ export function ServerConfig({ onSave, isLoading }: ServerConfigProps) {
       }
 
       logger.debug("[ServerConfig] Testing connection");
-      const response = await sendMessage<void>({
-        type: "TEST_CONNECTION",
-        payload: { url: testUrl },
-      });
+      const response = await commands.testConnection(testUrl);
 
       if (response.success) {
         setTestStatus("success");
         setUrl(testUrl);
       } else {
         setTestStatus("error");
-        setTestError(response.error || "Connection failed");
+        setTestError(response.error);
       }
     } catch (err) {
       setTestStatus("error");

@@ -222,7 +222,7 @@ test.describe("Domain Management API Tests", () => {
     page,
     mockServer,
   }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/domains/allow/exact", {
@@ -241,7 +241,7 @@ test.describe("Domain Management API Tests", () => {
     page,
     mockServer,
   }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/domains/deny/exact", {
@@ -260,7 +260,7 @@ test.describe("Domain Management API Tests", () => {
     page,
     mockServer,
   }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch(
@@ -276,7 +276,7 @@ test.describe("Domain Management API Tests", () => {
     page,
     mockServer,
   }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const response = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/search/example.com");
@@ -395,7 +395,7 @@ test.describe("Query Log", () => {
 
 test.describe("Query Log API Tests", () => {
   test("should retrieve query log from API", async ({ page, mockServer }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const queries = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/queries");
@@ -412,7 +412,7 @@ test.describe("Query Log API Tests", () => {
     page,
     mockServer,
   }) => {
-    await page.goto("https://example.com");
+    await page.setContent("<!doctype html><title>PiSentinel E2E</title>");
 
     const queries = await page.evaluate(async () => {
       const res = await fetch("http://localhost:8765/api/queries");

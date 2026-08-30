@@ -1,9 +1,13 @@
+import type { ConnectInstanceFailure } from "~/utils/connection-failure";
 import type { PiHoleInstance, InstanceState } from "~/utils/types";
 
 interface InstanceCardProps {
   instance: PiHoleInstance;
   state: InstanceState | null;
+  connectionFailure?: ConnectInstanceFailure | null;
   isActive: boolean;
+  isConnecting?: boolean;
+  isConnectionFlowActive?: boolean;
   onEdit: (instance: PiHoleInstance) => void;
   onDelete: (instanceId: string) => void;
   onConnect: (instanceId: string) => void;
@@ -14,7 +18,10 @@ interface InstanceCardProps {
 export function InstanceCard({
   instance,
   state,
+  connectionFailure = null,
   isActive,
+  isConnecting = false,
+  isConnectionFlowActive = false,
   onEdit,
   onDelete,
   onConnect,
@@ -24,6 +31,10 @@ export function InstanceCard({
   const isConnected = state?.isConnected ?? false;
   const displayName = instance.name || extractHostname(instance.piholeUrl);
 
+  const httpsNetworkGuidance = getHttpsNetworkGuidance(
+    instance.piholeUrl,
+    connectionFailure,
+  );
   return (
     <div class={`instance-card ${isActive ? "active" : ""}`}>
       <div class="instance-card-header">
@@ -41,13 +52,33 @@ export function InstanceCard({
           </span>
         </div>
       </div>
-
-      {state?.connectionError && (
-        <div class="instance-error">
-          <ErrorIcon />
-          {state.connectionError}
-        </div>
-      )}
+      {!isConnected &&
+        (httpsNetworkGuidance ||
+          connectionFailure ||
+          state?.connectionError) && (
+          <div class="instance-error">
+            <ErrorIcon />
+            {httpsNetworkGuidance ? (
+              <div>
+                <p>
+                  Chrome could not establish the HTTPS connection. The
+                  certificate may need to be trusted, or the Pi-hole may be
+                  unavailable.
+                </p>
+                <a
+                  class="btn btn-small btn-secondary"
+                  href={httpsNetworkGuidance.hostUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open Host
+                </a>
+              </div>
+            ) : (
+              (connectionFailure?.message ?? state?.connectionError)
+            )}
+          </div>
+        )}
 
       {isConnected && state?.stats && (
         <div class="instance-stats">
@@ -83,9 +114,10 @@ export function InstanceCard({
         ) : (
           <button
             class="btn btn-small btn-primary"
+            disabled={isConnecting || isConnectionFlowActive}
             onClick={() => onConnect(instance.id)}
           >
-            Connect
+            {isConnecting ? "Connecting..." : "Connect"}
           </button>
         )}
 
@@ -117,6 +149,20 @@ export function InstanceCard({
       </div>
     </div>
   );
+}
+
+function getHttpsNetworkGuidance(
+  instanceUrl: string,
+  failure: ConnectInstanceFailure | null,
+): { hostUrl: string } | null {
+  if (failure?.kind !== "network") return null;
+
+  try {
+    const url = new URL(instanceUrl);
+    return url.protocol === "https:" ? { hostUrl: url.origin } : null;
+  } catch {
+    return null;
+  }
 }
 
 function extractHostname(url: string): string {

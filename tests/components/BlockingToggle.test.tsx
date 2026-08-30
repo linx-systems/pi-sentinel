@@ -1,16 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { act } from "preact/test-utils";
-import { BlockingToggle } from "~/entrypoints/popup/components/BlockingToggle";
+const { setBlocking } = vi.hoisted(() => ({ setBlocking: vi.fn() }));
 
-// Mock browser API
-vi.mock("webextension-polyfill", () => ({
-  default: {
-    runtime: {
-      sendMessage: vi.fn(),
-    },
-  },
+vi.mock("~/utils/extension-commands", () => ({
+  createRuntimeExtensionCommands: () => ({ setBlocking }),
 }));
+
+import { BlockingToggle } from "~/entrypoints/popup/components/BlockingToggle";
 
 describe("BlockingToggle", () => {
   beforeEach(() => {
@@ -163,9 +160,8 @@ describe("BlockingToggle", () => {
       });
     });
 
-    it("should send message to enable blocking when clicking while disabled", async () => {
-      const browser = (await import("webextension-polyfill")).default;
-      vi.mocked(browser.runtime.sendMessage).mockResolvedValue({});
+    it("should invoke the blocking command when clicking while disabled", async () => {
+      setBlocking.mockResolvedValue({ success: true, data: {} });
 
       const { container } = render(
         <BlockingToggle enabled={false} timer={null} />,
@@ -175,18 +171,16 @@ describe("BlockingToggle", () => {
       fireEvent.click(toggleButton);
 
       await waitFor(() => {
-        expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
-          type: "SET_BLOCKING",
-          payload: { enabled: true },
-        });
+        expect(setBlocking).toHaveBeenCalledWith({ enabled: true });
       });
     });
 
     it("should disable button while loading", async () => {
-      const browser = (await import("webextension-polyfill")).default;
-      vi.mocked(browser.runtime.sendMessage).mockImplementation(
-        () => new Promise((resolve) => setTimeout(resolve, 100)),
-      );
+      setBlocking.mockImplementation(() => {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 100);
+        return promise;
+      });
 
       const { container } = render(
         <BlockingToggle enabled={false} timer={null} />,
@@ -218,9 +212,8 @@ describe("BlockingToggle", () => {
       });
     });
 
-    it("should send disable message with timer value", async () => {
-      const browser = (await import("webextension-polyfill")).default;
-      vi.mocked(browser.runtime.sendMessage).mockResolvedValue({});
+    it("should invoke the blocking command with the selected timer", async () => {
+      setBlocking.mockResolvedValue({ success: true, data: {} });
 
       const { container } = render(
         <BlockingToggle enabled={true} timer={null} />,
@@ -237,16 +230,15 @@ describe("BlockingToggle", () => {
       });
 
       await waitFor(() => {
-        expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
-          type: "SET_BLOCKING",
-          payload: { enabled: false, timer: 300 },
+        expect(setBlocking).toHaveBeenCalledWith({
+          enabled: false,
+          timer: 300,
         });
       });
     });
 
-    it("should send disable message without timer for Indefinitely", async () => {
-      const browser = (await import("webextension-polyfill")).default;
-      vi.mocked(browser.runtime.sendMessage).mockResolvedValue({});
+    it("should invoke the blocking command without a timer indefinitely", async () => {
+      setBlocking.mockResolvedValue({ success: true, data: {} });
 
       const { container } = render(
         <BlockingToggle enabled={true} timer={null} />,
@@ -263,16 +255,15 @@ describe("BlockingToggle", () => {
       });
 
       await waitFor(() => {
-        expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
-          type: "SET_BLOCKING",
-          payload: { enabled: false, timer: undefined },
+        expect(setBlocking).toHaveBeenCalledWith({
+          enabled: false,
+          timer: undefined,
         });
       });
     });
 
     it("should hide timer options after selection", async () => {
-      const browser = (await import("webextension-polyfill")).default;
-      vi.mocked(browser.runtime.sendMessage).mockResolvedValue({});
+      setBlocking.mockResolvedValue({ success: true, data: {} });
 
       const { container } = render(
         <BlockingToggle enabled={true} timer={null} />,

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "preact/hooks";
-import browser from "webextension-polyfill";
+import { createRuntimeExtensionCommands } from "~/utils/extension-commands";
 import { DISABLE_TIMERS } from "~/utils/constants";
 
 interface BlockingToggleProps {
   enabled: boolean;
   timer: number | null;
 }
+
+const commands = createRuntimeExtensionCommands();
 
 export function BlockingToggle({ enabled, timer }: BlockingToggleProps) {
   const [isLoading, setIsLoading] = useState(false);
@@ -42,10 +44,7 @@ export function BlockingToggle({ enabled, timer }: BlockingToggleProps) {
       // Re-enable blocking
       setIsLoading(true);
       try {
-        await browser.runtime.sendMessage({
-          type: "SET_BLOCKING",
-          payload: { enabled: true },
-        });
+        await commands.setBlocking({ enabled: true });
       } finally {
         setIsLoading(false);
       }
@@ -56,9 +55,9 @@ export function BlockingToggle({ enabled, timer }: BlockingToggleProps) {
     setIsLoading(true);
     setShowTimers(false);
     try {
-      await browser.runtime.sendMessage({
-        type: "SET_BLOCKING",
-        payload: { enabled: false, timer: seconds || undefined },
+      await commands.setBlocking({
+        enabled: false,
+        timer: seconds || undefined,
       });
     } finally {
       setIsLoading(false);
