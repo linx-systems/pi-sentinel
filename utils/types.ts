@@ -59,6 +59,24 @@ export interface DomainEntry {
   date_modified: number;
 }
 
+/**
+ * An exact allowlist entry managed by PiSentinel for a limited duration.
+ * Records are retained until the matching Pi-hole entry has been removed.
+ */
+export interface TemporaryAllowEntry {
+  id: string;
+  domain: string;
+  instanceId: string;
+  instanceName: string;
+  createdAt: number;
+  /** Null entries last for the current browser session and are cleaned on startup. */
+  expiresAt: number | null;
+  /** Set after a failed cleanup so the alarm retries the original instance. */
+  cleanupPending?: boolean;
+  /** Whether PiSentinel created the Pi-hole allowlist entry and may remove it. */
+  createdByExtension: boolean;
+}
+
 export interface ApiError {
   error: {
     key: string;

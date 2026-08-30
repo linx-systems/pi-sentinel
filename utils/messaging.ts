@@ -8,6 +8,7 @@ import type {
   QueryEntry,
   StatsSummary,
   TabDomainData,
+  TemporaryAllowEntry,
 } from "./types";
 import { TIMEOUTS } from "./constants";
 import { ErrorHandler, ErrorType } from "./error-handler";
@@ -42,8 +43,11 @@ export type MessageType =
   | "CONNECT_INSTANCE"
   | "DISCONNECT_INSTANCE"
   | "GET_INSTANCE_STATE"
-  | "GET_AGGREGATED_STATE"
-  | "CHECK_PASSWORD_AVAILABLE";
+  | "CHECK_PASSWORD_AVAILABLE"
+  | "CREATE_TEMPORARY_ALLOWS"
+  | "GET_TEMPORARY_ALLOWS"
+  | "REMOVE_TEMPORARY_ALLOWS"
+  | "TEMPORARY_ALLOWS_UPDATED";
 
 // Message Payloads
 export interface AuthenticatePayload {
@@ -121,6 +125,40 @@ export interface CheckPasswordAvailablePayload {
   instanceId: string;
 }
 
+export interface CreateTemporaryAllowsPayload {
+  domains: string[];
+  /** Null grants access for the current browser session. */
+  durationSeconds: number | null;
+  /** Omitted targets the active instance, or every configured instance in All mode. */
+  instanceIds?: string[];
+}
+
+export interface RemoveTemporaryAllowsPayload {
+  entryIds: string[];
+}
+
+export interface TemporaryAllowFailure {
+  domain: string;
+  instanceId: string;
+  instanceName: string;
+  error: string;
+}
+
+export interface TemporaryAllowRemovalFailure extends TemporaryAllowFailure {
+  entryId: string;
+}
+
+export interface CreateTemporaryAllowsResult {
+  entries: TemporaryAllowEntry[];
+  skippedDomains: string[];
+  failures: TemporaryAllowFailure[];
+}
+
+export interface RemoveTemporaryAllowsResult {
+  removedIds: string[];
+  failures: TemporaryAllowRemovalFailure[];
+}
+
 // Response Types
 export interface MessageResponse<T = unknown> {
   success: boolean;
@@ -162,7 +200,17 @@ export type Message =
   | {
       type: "CHECK_PASSWORD_AVAILABLE";
       payload: CheckPasswordAvailablePayload;
-    };
+    }
+  | {
+      type: "CREATE_TEMPORARY_ALLOWS";
+      payload: CreateTemporaryAllowsPayload;
+    }
+  | { type: "GET_TEMPORARY_ALLOWS" }
+  | {
+      type: "REMOVE_TEMPORARY_ALLOWS";
+      payload: RemoveTemporaryAllowsPayload;
+    }
+  | { type: "TEMPORARY_ALLOWS_UPDATED"; payload: TemporaryAllowEntry[] };
 
 // Serializable version of TabDomainData for messaging
 export interface SerializableTabDomains {
@@ -252,3 +300,8 @@ export type ConnectInstanceResponse = MessageResponse<{
 export type DisconnectInstanceResponse = MessageResponse<void>;
 export type GetInstanceStateResponse = MessageResponse<InstanceState>;
 export type GetAggregatedStateResponse = MessageResponse<AggregatedState>;
+export type CreateTemporaryAllowsResponse =
+  MessageResponse<CreateTemporaryAllowsResult>;
+export type GetTemporaryAllowsResponse = MessageResponse<TemporaryAllowEntry[]>;
+export type RemoveTemporaryAllowsResponse =
+  MessageResponse<RemoveTemporaryAllowsResult>;

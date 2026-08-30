@@ -20,12 +20,18 @@ export const STORAGE_KEYS = {
   INSTANCES: "pisentinel_instances",
   /** Per-instance session storage prefix (append instance ID) */
   INSTANCE_SESSION_PREFIX: "pisentinel_session_",
+  /** Persisted temporary exact-allow cleanup records */
+  TEMPORARY_ALLOWS: "pisentinel_temporary_allows",
+  /** Marks that temporary session allows belong to the current browser session. */
+  TEMPORARY_ALLOW_SESSION_INITIALIZED:
+    "pisentinel_temporary_allow_session_initialized",
 } as const;
 
 // Alarm Names
 export const ALARMS = {
   SESSION_KEEPALIVE: "pisentinel_session_keepalive",
   STATS_REFRESH: "pisentinel_stats_refresh",
+  TEMPORARY_ALLOW_CLEANUP: "pisentinel_temporary_allow_cleanup",
 } as const;
 
 // Default Values

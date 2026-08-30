@@ -13,6 +13,8 @@ and manage domains directly from your browser.
 - **Domain Tracking** - See all domains loaded by each tab, categorized as first-party or third-party
 - **Quick Actions** - Add domains to allowlist/denylist with one click
 - **Query Log** - Browse recent DNS queries with blocked/allowed filtering
+- **Broken-Site Repair** - Reload a page, review blocked domains observed for that tab, and selectively allow them
+- **Temporary Allows** - Allow domains for 5 minutes, 1 hour, or the current browser session with automatic cleanup and undo
 - **2FA Support** - Full TOTP authentication support for secured Pi-hole instances
 
 ## Screenshots
@@ -277,6 +279,11 @@ Open the sidebar (View → Sidebar → PiSentinel Domains) to see:
   - Third-party domains (orange)
   - Quick actions to allow/block each domain
 - **Query Log tab**: Recent DNS queries with filtering
+- **Repair tab**: Reload the active page and rank only blocked domains observed during that capture
+  - Select individual candidates before changing Pi-hole
+  - Allow selections for 5 minutes, 1 hour, or the browser session
+  - Undo entries created by the repair flow
+- **Temporary domain actions**: Create or cancel temporary allows directly from the Domains tab
 
 ### Badge
 

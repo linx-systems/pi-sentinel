@@ -11,6 +11,7 @@ import {
 } from "~/utils/icons";
 import { isSameSite } from "~/utils/utils";
 import { logger } from "~/utils/logger";
+import type { TemporaryAllowEntry } from "~/utils/types";
 import type { MessageResponse } from "~/utils/messaging";
 import { useToast } from "./ToastContext";
 
@@ -19,6 +20,12 @@ interface DomainListProps {
   thirdPartyDomains: string[];
   firstPartyDomain: string;
   onAddToList: (domain: string, listType: "allow" | "deny") => Promise<void>;
+  temporaryAllows: TemporaryAllowEntry[];
+  onCreateTemporaryAllow: (
+    domain: string,
+    durationSeconds: number | null,
+  ) => Promise<void>;
+  onRemoveTemporaryAllows: (entryIds: string[]) => Promise<void>;
 }
 
 type SearchResult = {
@@ -39,11 +46,21 @@ export function DomainList({
   thirdPartyDomains,
   firstPartyDomain,
   onAddToList,
+  temporaryAllows,
+  onCreateTemporaryAllow,
+  onRemoveTemporaryAllows,
 }: DomainListProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Map<string, SearchResult>>(
     new Map(),
   );
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!temporaryAllows.some((entry) => entry.expiresAt !== null)) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, [temporaryAllows]);
   const [isSearchingAll, setIsSearchingAll] = useState(false);
   const { showToast } = useToast();
 
@@ -484,7 +501,12 @@ export function DomainList({
           <ul class="domain-list">
             {filteredFirstParty.map((domain) => (
               <DomainItem
-                key={domain}
+                temporaryAllows={temporaryAllows.filter(
+                  (entry) => entry.domain === domain,
+                )}
+                onCreateTemporaryAllow={onCreateTemporaryAllow}
+                onRemoveTemporaryAllows={onRemoveTemporaryAllows}
+                now={now}
                 domain={domain}
                 isFirstParty
                 onAddToList={onAddToList}
@@ -505,7 +527,12 @@ export function DomainList({
           <ul class="domain-list">
             {filteredThirdParty.map((domain) => (
               <DomainItem
-                key={domain}
+                temporaryAllows={temporaryAllows.filter(
+                  (entry) => entry.domain === domain,
+                )}
+                onCreateTemporaryAllow={onCreateTemporaryAllow}
+                onRemoveTemporaryAllows={onRemoveTemporaryAllows}
+                now={now}
                 domain={domain}
                 isFirstParty={false}
                 onAddToList={onAddToList}
@@ -530,6 +557,13 @@ interface DomainItemProps {
   domain: string;
   isFirstParty: boolean;
   onAddToList: (domain: string, listType: "allow" | "deny") => Promise<void>;
+  temporaryAllows: TemporaryAllowEntry[];
+  now: number;
+  onCreateTemporaryAllow: (
+    domain: string,
+    durationSeconds: number | null,
+  ) => Promise<void>;
+  onRemoveTemporaryAllows: (entryIds: string[]) => Promise<void>;
   searchResult: SearchResult | null;
   onSearchResult: (result: SearchResult | null) => void;
 }
@@ -538,9 +572,14 @@ function DomainItem({
   domain,
   isFirstParty,
   onAddToList,
+  temporaryAllows,
+  now,
+  onCreateTemporaryAllow,
+  onRemoveTemporaryAllows,
   searchResult,
   onSearchResult,
 }: DomainItemProps) {
+  const [temporaryDuration, setTemporaryDuration] = useState<string>("300");
   const handleSearch = async () => {
     try {
       const response = (await browser.runtime.sendMessage({
@@ -554,6 +593,12 @@ function DomainItem({
     } catch (err) {
       logger.error("Search failed:", err);
     }
+  };
+
+  const createTemporaryAllow = () => {
+    const durationSeconds =
+      temporaryDuration === "session" ? null : Number(temporaryDuration);
+    return onCreateTemporaryAllow(domain, durationSeconds);
   };
 
   return (
@@ -584,8 +629,47 @@ function DomainItem({
           >
             <SearchIcon />
           </button>
+          <div class="temporary-allow-controls">
+            <select
+              class="temporary-allow-select"
+              value={temporaryDuration}
+              onChange={(event) =>
+                setTemporaryDuration((event.target as HTMLSelectElement).value)
+              }
+              aria-label={`Temporary allow duration for ${domain}`}
+            >
+              <option value="300">5 min</option>
+              <option value="3600">1 hour</option>
+              <option value="session">Session</option>
+            </select>
+            <button
+              class="action-btn allow"
+              onClick={createTemporaryAllow}
+              title={`Temporarily allow ${domain}`}
+              aria-label={`Temporarily allow ${domain}`}
+            >
+              Temp
+            </button>
+          </div>
         </div>
       </div>
+      {temporaryAllows.map((entry) => (
+        <div class="temporary-allow-badge" key={entry.id}>
+          <span>
+            Temporary: {entry.instanceName} ·{" "}
+            {entry.cleanupPending
+              ? "cleanup retry pending"
+              : formatTemporaryRemaining(entry, now)}
+          </span>
+          <button
+            class="temporary-allow-cancel"
+            onClick={() => onRemoveTemporaryAllows([entry.id])}
+            aria-label={`Cancel temporary allow for ${domain} on ${entry.instanceName}`}
+          >
+            Cancel
+          </button>
+        </div>
+      ))}
       {searchResult && (
         <div class="search-result domain-search-result">
           <div class="instance-search-results">
@@ -634,4 +718,23 @@ function DomainItem({
       )}
     </li>
   );
+}
+
+function formatTemporaryRemaining(
+  entry: TemporaryAllowEntry,
+  now: number,
+): string {
+  if (entry.expiresAt === null) return "browser session";
+
+  const remainingMs = Math.max(0, entry.expiresAt - now);
+  const remainingMinutes = Math.ceil(remainingMs / 60_000);
+  if (remainingMinutes < 60) {
+    return `${remainingMinutes} min remaining`;
+  }
+
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return minutes > 0
+    ? `${hours}h ${minutes}m remaining`
+    : `${hours}h remaining`;
 }

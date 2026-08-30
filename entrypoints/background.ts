@@ -8,6 +8,7 @@ import { store } from "~/background/state/store";
 import { badgeService } from "~/background/services/badge";
 import { notificationService } from "~/background/services/notifications";
 import { domainTracker } from "~/background/services/domain-tracker";
+import { TemporaryAllowService } from "~/background/services/temporary-allows";
 import {
   ALARMS,
   DEFAULTS,
@@ -16,12 +17,20 @@ import {
 } from "~/utils/constants";
 import { logger } from "~/utils/logger";
 import { ErrorHandler, ErrorType } from "~/utils/error-handler";
-import type { Message, MessageResponse } from "~/utils/messaging";
+import type {
+  CreateTemporaryAllowsPayload,
+  CreateTemporaryAllowsResult,
+  Message,
+  MessageResponse,
+  RemoveTemporaryAllowsPayload,
+  RemoveTemporaryAllowsResult,
+} from "~/utils/messaging";
 import type {
   EncryptedSessionData,
   ExtensionState,
   QueryEntry,
   SessionData,
+  TemporaryAllowEntry,
 } from "~/utils/types";
 
 export default defineBackground(() => {
@@ -91,6 +100,11 @@ export default defineBackground(() => {
    * Maps instance ID to failure count.
    */
   const instanceAuthFailures = new Map<string, number>();
+
+  const temporaryAllowService = new TemporaryAllowService({
+    getInstances: () => instanceManager.getInstances(),
+    getClient: (instanceId) => apiClientManager.getClient(instanceId),
+  });
 
   // ===== Chrome Service Worker State Persistence =====
   // Chrome MV3 uses service workers that terminate when idle (~30s).
@@ -382,6 +396,7 @@ export default defineBackground(() => {
       // Try to restore sessions for all instances
       logger.info("[PiSentinel] Attempting to restore sessions");
       await initializeInstances();
+      await temporaryAllowService.initialize();
 
       // Notify any open options pages that initialization is complete
       // so they can refresh instance states (especially connection status)
@@ -688,6 +703,10 @@ export default defineBackground(() => {
     GET_AGGREGATED_STATE: () => handleGetAggregatedState(),
     CHECK_PASSWORD_AVAILABLE: (payload) =>
       handleCheckPasswordAvailable(payload),
+    CREATE_TEMPORARY_ALLOWS: (payload) => handleCreateTemporaryAllows(payload),
+    GET_TEMPORARY_ALLOWS: () => handleGetTemporaryAllows(),
+    REMOVE_TEMPORARY_ALLOWS: (payload) => handleRemoveTemporaryAllows(payload),
+    TEMPORARY_ALLOWS_UPDATED: () => ({ success: true }),
   };
 
   async function handleMessage(
@@ -1633,6 +1652,7 @@ export default defineBackground(() => {
       const password = await instanceManager.getDecryptedPassword(
         payload.instanceId,
       );
+
       const available = password !== null;
       logger.info(
         `[Background] CHECK_PASSWORD_AVAILABLE for ${payload.instanceId}: available=${available}`,
@@ -1643,7 +1663,57 @@ export default defineBackground(() => {
       return { success: true, data: { available: false } };
     }
   }
+  async function waitForInstanceClients(): Promise<void> {
+    if (initializationPromise) {
+      await initializationPromise;
+    }
+  }
 
+  async function handleCreateTemporaryAllows(
+    payload: CreateTemporaryAllowsPayload,
+  ): Promise<MessageResponse<CreateTemporaryAllowsResult>> {
+    if (
+      !Array.isArray(payload?.domains) ||
+      (payload.durationSeconds !== null &&
+        (!Number.isFinite(payload.durationSeconds) ||
+          payload.durationSeconds <= 0)) ||
+      (payload.instanceIds !== undefined && !Array.isArray(payload.instanceIds))
+    ) {
+      return { success: false, error: "Invalid temporary allow request" };
+    }
+    await waitForInstanceClients();
+    return {
+      success: true,
+      data: await temporaryAllowService.create(
+        payload.domains,
+        payload.durationSeconds,
+        payload.instanceIds,
+      ),
+    };
+  }
+
+  async function handleGetTemporaryAllows(): Promise<
+    MessageResponse<TemporaryAllowEntry[]>
+  > {
+    await waitForInstanceClients();
+    return { success: true, data: await temporaryAllowService.list() };
+  }
+
+  async function handleRemoveTemporaryAllows(
+    payload: RemoveTemporaryAllowsPayload,
+  ): Promise<MessageResponse<RemoveTemporaryAllowsResult>> {
+    if (!Array.isArray(payload?.entryIds)) {
+      return {
+        success: false,
+        error: "Invalid temporary allow removal request",
+      };
+    }
+    await waitForInstanceClients();
+    return {
+      success: true,
+      data: await temporaryAllowService.remove(payload.entryIds),
+    };
+  }
   // ===== Stats Polling =====
 
   async function refreshStats(): Promise<void> {
@@ -1689,6 +1759,10 @@ export default defineBackground(() => {
 
       case ALARMS.STATS_REFRESH:
         await handleStatsRefresh();
+        break;
+
+      case ALARMS.TEMPORARY_ALLOW_CLEANUP:
+        await temporaryAllowService.handleAlarm();
         break;
     }
   }
