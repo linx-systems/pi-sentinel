@@ -49,9 +49,11 @@ function AppContent() {
       if (currentTab?.id) {
         const domainsResponse = await commands.getTabDomains(currentTab.id);
 
-        if (domainsResponse?.success && domainsResponse.data) {
+        if (domainsResponse?.success) {
           setTabDomains(domainsResponse.data);
         }
+      } else {
+        setTabDomains(null);
       }
     } catch (err) {
       logger.error("Failed to load tab domains:", err);
@@ -222,6 +224,25 @@ function AppContent() {
         {tabDomains && (
           <div class="current-site" title={tabDomains.pageUrl}>
             {tabDomains.firstPartyDomain}
+          </div>
+        )}
+        {tabDomains?.pageBlocked && (
+          <div class="page-blocked" role="status">
+            <p>
+              This page may be blocked by Pi-hole.{" "}
+              {tabDomains.pageBlocked.domain} appears on a blocklist
+              {tabDomains.pageBlocked.instanceName
+                ? ` on ${tabDomains.pageBlocked.instanceName}`
+                : ""}
+              .
+            </p>
+            <button
+              onClick={() =>
+                handleAddToList(tabDomains.pageBlocked!.domain, "allow")
+              }
+            >
+              Allow domain
+            </button>
           </div>
         )}
       </header>

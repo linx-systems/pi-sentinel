@@ -11,6 +11,7 @@ import type {
   InstanceState,
   StatsSummary,
   TabDomainData,
+  PageBlockedInfo,
 } from "~/utils/types";
 
 /**
@@ -466,6 +467,7 @@ class StateStore {
     // Return serializable copy
     return {
       ...data,
+      pageBlocked: data.pageBlocked ? { ...data.pageBlocked } : null,
       domains: new Set(data.domains),
       thirdPartyDomains: new Set(data.thirdPartyDomains),
     };
@@ -485,7 +487,16 @@ class StateStore {
       firstPartyDomain,
       domains: new Set([firstPartyDomain]),
       thirdPartyDomains: new Set(),
+      pageBlocked: null,
     });
+    void this.broadcastTabDomainsUpdate(tabId);
+  }
+
+  setTabPageBlocked(tabId: number, info: PageBlockedInfo): void {
+    const data = this.tabDomains.get(tabId);
+    if (!data || data.firstPartyDomain !== info.domain) return;
+    data.pageBlocked = { ...info };
+    void this.broadcastTabDomainsUpdate(tabId);
   }
 
   /**
@@ -538,6 +549,7 @@ class StateStore {
    */
   clearTabDomains(tabId: number): void {
     this.tabDomains.delete(tabId);
+    void this.broadcastTabDomainsUpdate(tabId);
   }
 
   /**
@@ -556,6 +568,7 @@ class StateStore {
     firstPartyDomain: string;
     domains: string[];
     thirdPartyDomains: string[];
+    pageBlocked: PageBlockedInfo | null;
   } | null {
     const data = this.tabDomains.get(tabId);
     if (!data) return null;
@@ -566,6 +579,7 @@ class StateStore {
       firstPartyDomain: data.firstPartyDomain,
       domains: Array.from(data.domains),
       thirdPartyDomains: Array.from(data.thirdPartyDomains),
+      pageBlocked: data.pageBlocked ? { ...data.pageBlocked } : null,
     };
   }
 
@@ -664,12 +678,10 @@ class StateStore {
   private async broadcastTabDomainsUpdate(tabId: number): Promise<void> {
     try {
       const data = this.getSerializableTabDomains(tabId);
-      if (data) {
-        await browser.runtime.sendMessage({
-          type: "TAB_DOMAINS_UPDATED",
-          payload: data,
-        });
-      }
+      await browser.runtime.sendMessage({
+        type: "TAB_DOMAINS_UPDATED",
+        payload: data,
+      });
     } catch (error) {
       // No listeners is normal (sidebar may not be open)
       // Only log if it's a real error, not "Could not establish connection"

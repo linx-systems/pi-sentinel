@@ -1,4 +1,6 @@
 import browser from "webextension-polyfill";
+import type { FleetQueries } from "../fleet/queries";
+import { notificationService } from "./notifications";
 import { store } from "../state/store";
 import { logger } from "~/utils/logger";
 import { ErrorHandler, ErrorType } from "~/utils/error-handler";
@@ -11,14 +13,27 @@ import { extractDomain } from "~/utils/utils";
  * Categorizes domains as first-party or third-party.
  */
 
-class DomainTrackerService {
+const BLOCKING_ERRORS = new Set([
+  "net::ERR_NAME_NOT_RESOLVED",
+  "net::ERR_NAME_RESOLUTION_FAILED",
+  "NS_ERROR_UNKNOWN_HOST",
+  "NS_ERROR_UNKNOWN_PROXY_HOST",
+  "net::ERR_CONNECTION_REFUSED",
+  "net::ERR_ADDRESS_UNREACHABLE",
+  "NS_ERROR_CONNECTION_REFUSED",
+]);
+
+export class DomainTrackerService {
+  private queries?: Pick<FleetQueries, "searchDomain">;
+  private readonly navigations = new Map<number, object>();
   private isInitialized = false;
 
   /**
    * Initialize the domain tracker.
    * Sets up webRequest and tab listeners.
    */
-  initialize(): void {
+  initialize(queries: Pick<FleetQueries, "searchDomain">): void {
+    this.queries = queries;
     if (this.isInitialized) return;
     this.isInitialized = true;
 
@@ -73,6 +88,7 @@ class DomainTrackerService {
       // Listen for tab removal
       browser.tabs.onRemoved.addListener((tabId) => {
         try {
+          this.navigations.delete(tabId);
           store.clearTabDomains(tabId);
         } catch (error) {
           ErrorHandler.handle(
@@ -154,6 +170,7 @@ class DomainTrackerService {
    * Handle navigation to a new page.
    */
   private handleNavigation(tabId: number, url: string): void {
+    this.navigations.set(tabId, {});
     if (!this.isTrackableUrl(url)) {
       store.clearTabDomains(tabId);
       return;
@@ -189,12 +206,39 @@ class DomainTrackerService {
 
     // Initialize tab tracking if this is a main frame
     if (type === "main_frame") {
+      const navigation = {};
+      this.navigations.set(tabId, navigation);
       store.initTabDomains(tabId, url, domain);
+      if ("error" in details && BLOCKING_ERRORS.has(details.error)) {
+        void this.checkPageBlocked(tabId, domain, navigation);
+      }
       return;
     }
 
     // Add domain to existing tab tracking
     store.addTabDomain(tabId, domain);
+  }
+
+  private async checkPageBlocked(
+    tabId: number,
+    domain: string,
+    navigation: object,
+  ): Promise<void> {
+    try {
+      const result = await this.queries?.searchDomain(domain);
+      if (this.navigations.get(tabId) !== navigation) return;
+      const match = result?.entries.find(
+        (entry) => !entry.allowlist && (entry.gravity || entry.denylist),
+      );
+      if (!match) return;
+      store.setTabPageBlocked(tabId, {
+        domain,
+        instanceName: match.instanceName,
+      });
+      await notificationService.showPageBlocked(domain);
+    } catch (error) {
+      ErrorHandler.handle(error, "Check blocked page", ErrorType.INTERNAL);
+    }
   }
 
   /**

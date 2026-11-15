@@ -467,7 +467,7 @@ export default defineBackground(() => {
       await notificationService.initialize();
 
       logger.info("[PiSentinel] Initializing domain tracker");
-      domainTracker.initialize();
+      domainTracker.initialize(fleetQueries);
 
       logger.info("[PiSentinel] Attempting to restore instance sessions");
       await instanceRuntime.initialize();

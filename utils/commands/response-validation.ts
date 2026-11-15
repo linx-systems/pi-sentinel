@@ -84,7 +84,13 @@ function isTabDomains(value: unknown): value is SerializableTabDomains | null {
       typeof value.pageUrl === "string" &&
       typeof value.firstPartyDomain === "string" &&
       isStringArray(value.domains) &&
-      isStringArray(value.thirdPartyDomains))
+      isStringArray(value.thirdPartyDomains) &&
+      (value.pageBlocked === undefined ||
+        value.pageBlocked === null ||
+        (isRecord(value.pageBlocked) &&
+          typeof value.pageBlocked.domain === "string" &&
+          (value.pageBlocked.instanceName === undefined ||
+            typeof value.pageBlocked.instanceName === "string"))))
   );
 }
 

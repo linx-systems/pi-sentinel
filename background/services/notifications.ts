@@ -16,6 +16,7 @@ import { logger } from "~/utils/logger";
 const NOTIFICATION_IDS = {
   BLOCKING_STATUS: "pisentinel-blocking-status",
   CONNECTION_ERROR: "pisentinel-connection-error",
+  PAGE_BLOCKED: "pisentinel-page-blocked",
   DOMAIN_ADDED: "pisentinel-domain-added",
 } as const;
 
@@ -86,6 +87,15 @@ class NotificationService {
     await this.show(NOTIFICATION_IDS.DOMAIN_ADDED, {
       title: `Domain ${action}`,
       message: `${domain} added to ${listType}list`,
+      iconUrl: this.getIconUrl(),
+    });
+  }
+
+  async showPageBlocked(domain: string): Promise<void> {
+    if (!this.notificationsEnabled) return;
+    await this.show(NOTIFICATION_IDS.PAGE_BLOCKED, {
+      title: "Page may be blocked by Pi-hole",
+      message: `${domain} failed to load and appears on a Pi-hole blocklist. Open the side panel to allow it.`,
       iconUrl: this.getIconUrl(),
     });
   }
