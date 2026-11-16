@@ -999,3 +999,15 @@ body {
   color: #b4b4bd;
   font-size: 11px;
 }
+
+.page-blocked {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--warning-color, #b7791f);
+  border-radius: 6px;
+}
+
+.page-blocked p {
+  margin: 0 0 0.5rem;
+  overflow-wrap: anywhere;
+}

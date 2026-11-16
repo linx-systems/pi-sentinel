@@ -266,6 +266,34 @@ describe("StateStore", () => {
   });
 
   describe("tab domain tracking", () => {
+    it("publishes blocked pages and resets them on navigation", () => {
+      store.initTabDomains(1, "https://blocked.test/", "blocked.test");
+      store.setTabPageBlocked(1, {
+        domain: "blocked.test",
+        instanceName: "Home",
+      });
+      expect(store.getSerializableTabDomains(1)?.pageBlocked).toEqual({
+        domain: "blocked.test",
+        instanceName: "Home",
+      });
+      expect(browser.runtime.sendMessage).toHaveBeenLastCalledWith({
+        type: "TAB_DOMAINS_UPDATED",
+        payload: expect.objectContaining({
+          pageBlocked: { domain: "blocked.test", instanceName: "Home" },
+        }),
+      });
+      store.initTabDomains(1, "https://other.test/", "other.test");
+      expect(store.getSerializableTabDomains(1)?.pageBlocked).toBeNull();
+      expect(browser.runtime.sendMessage).toHaveBeenLastCalledWith({
+        type: "TAB_DOMAINS_UPDATED",
+        payload: expect.objectContaining({ pageBlocked: null }),
+      });
+      store.setTabPageBlocked(1, { domain: "blocked.test" });
+      expect(store.getSerializableTabDomains(1)?.pageBlocked).toBeNull();
+      store.clearTabDomains(1);
+      store.setTabPageBlocked(1, { domain: "other.test" });
+      expect(store.getSerializableTabDomains(1)).toBeNull();
+    });
     describe("initTabDomains", () => {
       it("should initialize domain tracking for a tab", () => {
         store.initTabDomains(1, "https://example.com", "example.com");

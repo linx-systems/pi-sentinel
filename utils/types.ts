@@ -97,7 +97,13 @@ export interface ExtensionState {
   totpRequired: boolean;
 }
 
+export interface PageBlockedInfo {
+  domain: string;
+  instanceName?: string;
+}
+
 export interface TabDomainData {
+  pageBlocked: PageBlockedInfo | null;
   tabId: number;
   pageUrl: string;
   firstPartyDomain: string;

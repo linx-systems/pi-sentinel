@@ -1,4 +1,8 @@
-import type { ExtensionState, TemporaryAllowEntry } from "./types";
+import type {
+  ExtensionState,
+  TemporaryAllowEntry,
+  PageBlockedInfo,
+} from "./types";
 import type { ConnectInstanceFailure } from "./connection-failure";
 
 // Message Types
@@ -149,7 +153,7 @@ export type CommandMessage =
 
 export type BroadcastMessage =
   | { type: "STATE_UPDATED"; payload: Partial<ExtensionState> }
-  | { type: "TAB_DOMAINS_UPDATED"; payload: SerializableTabDomains }
+  | { type: "TAB_DOMAINS_UPDATED"; payload: SerializableTabDomains | null }
   | { type: "INSTANCES_UPDATED" }
   | { type: "TEMPORARY_ALLOWS_UPDATED"; payload: TemporaryAllowEntry[] };
 
@@ -158,6 +162,7 @@ export type MessageType = Message["type"];
 
 // Serializable version of TabDomainData for messaging
 export interface SerializableTabDomains {
+  pageBlocked?: PageBlockedInfo | null;
   tabId: number;
   pageUrl: string;
   firstPartyDomain: string;
